@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>羽羽BOT</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="vue.js"></script>
+  <script src="pages/dashboard.js"></script>
+  <script src="pages/logs.js"></script>
+  <script src="pages/system.js"></script>
+  <script src="pages/bot.js"></script>
+  <script src="pages/about.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg-primary: #f5f5f5;
+      --bg-secondary: #ffffff;
+      --bg-sidebar: #ffffff;
+      --text-primary: #333333;
+      --text-secondary: #666666;
+      --accent-color: #6b5b95;
+      --border-color: #e0e0e0;
+      --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      --hover-bg: #f0f0f0;
+    }
+    [data-theme="dark"] {
+      --bg-primary: #1a1a2e;
+      --bg-secondary: #16213e;
+      --bg-sidebar: #0f0f23;
+      --text-primary: #e0e0e0;
+      --text-secondary: #a0a0a0;
+      --accent-color: #9d8ccc;
+      --border-color: #2a2a4a;
+      --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      --hover-bg: #252545;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #app { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 70px;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 20px 0; flex-shrink: 0; height: 100vh;
+      transition: background-color 0.3s, border-color 0.3s;
+    }
+    .logo { width: 45px; height: 45px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-color), #a084ca); display: flex; align-items: center; justify-content: center; margin-bottom: 30px; }
+    .logo img { width: 40px; height: 40px; border-radius: 50%; }
+    .nav-menu { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+    .nav-item { width: 50px; height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 12px; cursor: pointer; transition: background-color 0.2s; color: var(--text-secondary); text-decoration: none; }
+    .nav-item:hover, .nav-item.active { background-color: var(--hover-bg); color: var(--accent-color); }
+    .nav-item svg { width: 22px; height: 22px; margin-bottom: 2px; }
+    .nav-item span { font-size: 10px; }
+    .theme-toggle { width: 40px; height: 40px; border-radius: 50%; border: none; background-color: var(--hover-bg); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; margin-top: auto; }
+    .theme-toggle:hover { background-color: var(--accent-color); color: white; }
+    .theme-toggle svg { width: 20px; height: 20px; }
+    .main-content { flex: 1; padding: 30px 40px; overflow-y: auto; }
+    .main-content:has(.logs-page) { overflow-y: hidden; }
+    .page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
+    .page-header svg { width: 28px; height: 28px; color: var(--accent-color); }
+    .page-header h1 { font-size: 24px; font-weight: 600; }
+    .card { background-color: var(--bg-secondary); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: var(--card-shadow); transition: background-color 0.3s; width: 100%; }
+    .card-title { font-size: 16px; font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
+    .card-title svg { width: 18px; height: 18px; color: var(--accent-color); }
+    .user-card { display: flex; align-items: center; gap: 15px; }
+    .user-avatar { width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #ffd1dc, #ffb6c1); }
+    .user-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+    .user-info h3 { font-size: 18px; margin-bottom: 5px; }
+    .user-info p { font-size: 13px; color: var(--text-secondary); }
+    .version-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .version-number { font-size: 13px; color: var(--text-secondary); }
+    .version-status { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #4caf50; }
+    .version-status svg { width: 14px; height: 14px; }
+    .version-link { font-size: 12px; color: var(--accent-color); text-decoration: none; cursor: pointer; }
+    .version-link:hover { text-decoration: underline; }
+    .btn-primary { display: inline-flex; align-items: center; gap: 6px; background-color: var(--accent-color); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary svg { width: 16px; height: 16px; }
+    .btn-center { display: flex; justify-content: center; margin: 20px 0; }
+    .links-list { list-style: none; }
+    .links-list li { margin-bottom: 12px; }
+    .links-list a { display: flex; align-items: center; gap: 8px; color: var(--accent-color); text-decoration: none; font-size: 14px; }
+    .links-list a:hover { text-decoration: underline; }
+    .links-list svg { width: 16px; height: 16px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
+    .stat-item { text-align: center; padding: 15px; background: var(--hover-bg); border-radius: 8px; }
+    .stat-value { font-size: 28px; font-weight: 600; color: var(--accent-color); }
+    .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+    .log-controls { display: flex; align-items: center; justify-content: flex-end; gap: 15px; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color); }
+    .toggle-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .toggle-slider { position: relative; width: 44px; height: 24px; background-color: var(--border-color); border-radius: 24px; transition: background-color 0.3s; }
+    .toggle-switch .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; border-radius: 50%; transition: transform 0.3s; }
+    .toggle-switch input:checked + .toggle-slider { background-color: var(--accent-color); }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+    .toggle-label { font-size: 14px; color: var(--text-primary); user-select: none; }
+    .btn-clear { display: inline-flex; align-items: center; gap: 6px; background-color: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+    .btn-clear:hover { background-color: var(--accent-color); color: white; border-color: var(--accent-color); }
+    .btn-clear:active { transform: scale(0.98); }
+    .btn-clear svg { width: 16px; height: 16px; }
+    .logs-page { height: calc(100vh - 60px); display: flex; flex-direction: column; }
+    .logs-page .card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .log-container { flex: 1; min-height: 0; overflow-y: auto; font-family: monospace; font-size: 13px; background-color: var(--hover-bg); border-radius: 6px; padding: 10px; }
+    .log-item { padding: 8px 10px; border-bottom: 1px solid var(--border-color); display: flex; gap: 12px; align-items: flex-start; }
+    .log-item:last-child { border-bottom: none; }
+    .log-time { color: var(--text-secondary); min-width: 80px; flex-shrink: 0; }
+    .log-source { color: var(--accent-color); min-width: 50px; flex-shrink: 0; font-weight: 500; }
+    .log-info { color: #4caf50; flex: 1; word-break: break-word; }
+    .log-warn { color: #ff9800; flex: 1; word-break: break-word; }
+    .log-error { color: #f44336; flex: 1; word-break: break-word; }
+    .log-debug { color: #2196f3; flex: 1; word-break: break-word; }
+    .config-form { display: flex; flex-direction: column; gap: 15px; }
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-group label { font-size: 14px; color: var(--text-secondary); }
+    .form-group input, .form-group select, .form-group textarea { padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 14px; transition: border-color 0.2s; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--accent-color); }
+    .form-group textarea { min-height: 100px; resize: vertical; }
+    .switch-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+    .switch { position: relative; width: 44px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border-color); transition: 0.3s; border-radius: 24px; }
+    .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: 0.3s; border-radius: 50%; }
+    input:checked + .slider { background-color: var(--accent-color); }
+    input:checked + .slider:before { transform: translateX(20px); }
+  </style>
+</head>
+<body>
+<div id="app">
+  <nav class="sidebar">
+    <div class="logo"><img src="favicon.ico" alt="Logo"></div>
+    <div class="nav-menu">
+      <a v-for="item in navItems" :key="item.id" class="nav-item" :class="{ active: currentPage === item.id }" @click="currentPage = item.id">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" v-html="item.icon"></svg>
+        <span>{{ item.name }}</span>
+      </a>
+    </div>
+    <button class="theme-toggle" @click="toggleTheme" title="切换主题">
+      <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="5"></circle>
+        <line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+        <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+      </svg>
+      <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+      </svg>
+    </button>
+  </nav>
+  <main class="main-content">
+    <dashboard-page v-if="currentPage === 'dashboard'" :stats="stats"></dashboard-page>
+    <logs-page v-if="currentPage === 'logs'" :logs="logs"></logs-page>
+    <system-page v-if="currentPage === 'system'" :system-config="systemConfig"></system-page>
+    <bot-page v-if="currentPage === 'bot'" :bot-config="botConfig"></bot-page>
+    <about-page v-if="currentPage === 'about'"></about-page>
+  </main>
+</div>
+<script>
+const { createApp, ref, onMounted } = Vue;
+
+const app = createApp({
+  setup() {
+    const isDark = ref(false);
+    const currentPage = ref('dashboard');
+    const navItems = [
+      { id: 'dashboard', name: '面板', icon: '<rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>' },
+      { id: 'logs', name: '日志', icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>' },
+      { id: 'system', name: '系统', icon: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>' },
+      { id: 'bot', name: 'BOT', icon: '<line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line>' },
+      { id: 'about', name: '关于', icon: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>' }
+    ];
+    const stats = ref({ messages: 1234, groups: 56, friends: 128, uptime: '3天' });
+    const logs = ref([]);
+    const systemConfig = ref({ port: 8080, dataDir: './data', autoStart: true, autoUpdate: false });
+    const botConfig = ref({ api: '', eventWs: '', token: '' });
+    const toggleTheme = () => {
+      isDark.value = !isDark.value;
+      document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : '');
+      localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+    };
+    onMounted(() => {
+      if (localStorage.getItem('theme') === 'dark') {
+        isDark.value = true;
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+      // 恢复上次访问的页面
+      const savedPage = localStorage.getItem('lastPage');
+      if (savedPage && navItems.some(item => item.id === savedPage)) {
+        currentPage.value = savedPage;
+      }
+    });
+    // 监听页面变化，保存到 localStorage
+    const originalCurrentPage = currentPage;
+    return {
+      isDark,
+      get currentPage() {
+        return originalCurrentPage.value;
+      },
+      set currentPage(value) {
+        originalCurrentPage.value = value;
+        localStorage.setItem('lastPage', value);
+      },
+      navItems,
+      stats,
+      logs,
+      systemConfig,
+      botConfig,
+      toggleTheme
+    };
+  }
+});
+
+app.component('dashboard-page', DashboardPage);
+app.component('logs-page', LogsPage);
+app.component('system-page', SystemPage);
+app.component('bot-page', BotPage);
+app.component('about-page', AboutPage);
+app.mount('#app');
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+[package]
+name = "yuyubot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tao = "0.34.5"
+wry = "0.53.5"
+http = "1.4.0"
+rocket = { version = "0.5.1", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "sync"] }
+
+expectrl = "0.8.0"
+rust-embed = "8"
+
+image = "0.24"
+tray-icon = "0.21.2"
+ws = { package = "rocket_ws", version = "0.1.1" }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi"] }
+chrono = "0.4"
+lazy_static = "1.4"
+
+[build-dependencies]
+winres = "0.1"
