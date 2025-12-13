@@ -177,7 +177,10 @@ fn load_window_icon() -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(data, width, height).ok()
 }
 
-pub fn run_app(port: u16) {
+use std::sync::Arc;
+use crate::server::ServerState;
+
+pub fn run_app(port: u16, server_state: Arc<ServerState>) {
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     let base_url = format!("http://127.0.0.1:{}", port);
@@ -189,17 +192,20 @@ pub fn run_app(port: u16) {
 
     // 托盘菜单
     let show_item = MenuItem::new("显示窗口", true, None);
+    let restart_item = MenuItem::new("重启程序", true, None);
     let quit_item = MenuItem::new("退出程序", true, None);
     let show_item_id = show_item.id().clone();
+    let restart_item_id = restart_item.id().clone();
     let quit_item_id = quit_item.id().clone();
 
     let tray_menu = Menu::new();
-    let _ = tray_menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item]);
+    let _ = tray_menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &restart_item, &quit_item]);
 
     // 托盘图标
     let _tray_icon = if let Some(icon) = load_tray_icon() {
         let proxy_tray = proxy.clone();
         let proxy_menu = proxy.clone();
+        
 
         TrayIconEvent::set_event_handler(Some(move |event| {
             let _ = proxy_tray.send_event(UserEvent::TrayIconEvent(event));
@@ -233,6 +239,14 @@ pub fn run_app(port: u16) {
         }
 
         match event {
+            Event::LoopDestroyed => {
+                // 事件循环销毁时执行清理
+                log_info!("正在停止所有插件...");
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    server_state.plugin_manager.stop_all_plugins().await;
+                });
+            }
             Event::WindowEvent { event: WindowEvent::CloseRequested, window_id, .. } => {
                 webviews.remove(&window_id);
                 if main_window_id == Some(window_id) { main_window_id = None; }
@@ -248,6 +262,17 @@ pub fn run_app(port: u16) {
                 }
                 UserEvent::MenuEvent(menu_event) => {
                     if menu_event.id == quit_item_id {
+                        *control_flow = ControlFlow::Exit;
+                    } else if menu_event.id == restart_item_id {
+                        // 重启前先停止所有插件
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            server_state.plugin_manager.stop_all_plugins().await;
+                        });
+                        
+                        if let Ok(exe_path) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe_path).spawn();
+                        }
                         *control_flow = ControlFlow::Exit;
                     } else if menu_event.id == show_item_id {
                         show_or_create_main_window(&mut webviews, &mut main_window_id, event_loop_window_target, &proxy, &base_url);

@@ -2,7 +2,7 @@ const LogsPage = {
   data() {
     return {
       logs: [],
-      ws: null,
+      eventSource: null,
       autoRefresh: true,
     };
   },
@@ -43,11 +43,11 @@ const LogsPage = {
   `,
   mounted() {
     this.loadInitialLogs();
-    this.connectWebSocket();
+    this.connectSSE();
   },
   beforeUnmount() {
-    if (this.ws) {
-      this.ws.close();
+    if (this.eventSource) {
+      this.eventSource.close();
     }
   },
   methods: {
@@ -61,15 +61,14 @@ const LogsPage = {
         })
         .catch(err => console.error('Failed to load logs:', err));
     },
-    connectWebSocket() {
+    connectSSE() {
       if (!this.autoRefresh) return;
       
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/logs/stream`;
+      const sseUrl = `/api/logs/stream`;
       
-      this.ws = new WebSocket(wsUrl);
+      this.eventSource = new EventSource(sseUrl);
       
-      this.ws.onmessage = (event) => {
+      this.eventSource.onmessage = (event) => {
         try {
           const log = JSON.parse(event.data);
           this.logs.push(log);
@@ -89,23 +88,20 @@ const LogsPage = {
         }
       };
       
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
-      
-      this.ws.onclose = () => {
+      this.eventSource.onerror = (error) => {
+        console.error('SSE error:', error);
+        console.log('SSE closed, reconnecting in 3s...');
         if (this.autoRefresh) {
-          console.log('WebSocket closed, reconnecting in 3s...');
-          setTimeout(() => this.connectWebSocket(), 3000);
+          setTimeout(() => this.connectSSE(), 3000);
         }
       };
     },
     onAutoRefreshChange() {
       if (this.autoRefresh) {
-        this.connectWebSocket();
-      } else if (this.ws) {
-        this.ws.close();
-        this.ws = null;
+        this.connectSSE();
+      } else if (this.eventSource) {
+        this.eventSource.close();
+        this.eventSource = null;
       }
     },
     clearLogs() {
