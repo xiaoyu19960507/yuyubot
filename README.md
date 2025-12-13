@@ -2,6 +2,10 @@
 
 YuyuBot 是一个为 Milky 协议设计的桌面端 Bot 管理框架。通过图形界面管理 Bot 连接和插件运行，让你专注于插件开发。
 
+## 截图
+
+![插件管理](screenshots/plugins.png)
+
 ## 功能概览
 
 ### Bot 连接管理
