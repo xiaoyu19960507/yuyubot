@@ -281,3 +281,5 @@ cargo build --release
 ## 系统要求
 
 - Windows 10/11
+
+- WebView2
