@@ -123,7 +123,7 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                 let plugin_manager_for_auto_start = plugin_manager.clone();
                 tokio::spawn(async move {
                     // 等待一小段时间确保服务器完全启动
-                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     let enabled_plugins = plugin_manager_for_auto_start.get_enabled_plugins();
                     for plugin_id in enabled_plugins {
                         let name = plugin_manager_for_auto_start.get_plugin_name(&plugin_id).await.unwrap_or_else(|| plugin_id.clone());
@@ -138,7 +138,7 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                 let bot_state_for_auto_connect = bot_state.clone();
                 tokio::spawn(async move {
                     // 等待一小段时间确保服务器完全启动
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     api::check_and_auto_connect(bot_state_for_auto_connect);
                 });
                 
@@ -169,6 +169,9 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                         api::list_plugins,
                         api::start_plugin,
                         api::stop_plugin,
+                        api::uninstall_plugin,
+                        api::export_plugin,
+                        api::import_plugin,
                         api::get_plugin_output,
                         api::clear_plugin_output,
                         api::plugin_output_stream,

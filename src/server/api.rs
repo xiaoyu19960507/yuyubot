@@ -5,6 +5,9 @@ use crate::plus::PluginManager;
 use std::sync::Arc;
 use std::path::PathBuf;
 use std::time::Duration;
+use zip;
+use walkdir;
+use rfd;
 
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
@@ -294,7 +297,7 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
                     event_port: 3011,
                     token: None,
                     auto_connect: false,
-                },
+                    },
             })
         }
     }
@@ -596,7 +599,6 @@ async fn connect_bot_sse(sse_url: &str, token: Option<String>, bot_state: Arc<cr
                     };
                     let _ = bot_state.status_sender.send(status);
                     
-                    // 处理SSE连接
                     let _ = handle_bot_sse_stream(response, bot_state.clone()).await;
                     
                     bot_state.is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -853,5 +855,205 @@ pub fn plugin_output_stream(plugin_id: String, manager: &State<Arc<PluginManager
                 }
             }
         }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ExportPluginRequest {
+    pub plugin_id: String,
+}
+
+#[post("/plugins/export", format = "json", data = "<req>")]
+pub async fn export_plugin(req: Json<ExportPluginRequest>, plugin_manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+    let plugin_id = &req.plugin_id;
+    
+    // Get plugin directory
+    let plugin_dir = match plugin_manager.get_plugin_dir(plugin_id).await {
+        Some(path) => path,
+        None => return Json(ApiResponse {
+            retcode: 1,
+            data: "Plugin not found".to_string(),
+        }),
+    };
+
+    // Run file dialog and compression in a blocking task
+    // clone plugin_id for the closure
+    let plugin_id_clone = plugin_id.clone();
+    
+    let result = tokio::task::spawn_blocking(move || {
+        // Open file dialog
+        // Default name: <plugin_id>.yuyu.7z
+        // Filter: 7z (but we write zip)
+        let target_path = rfd::FileDialog::new()
+            .set_file_name(&format!("{}.yuyu.7z", plugin_id_clone))
+            .add_filter("7z Archive", &["7z"])
+            .add_filter("Zip Archive", &["zip"])
+            .save_file();
+            
+        let target_path = match target_path {
+            Some(p) => p,
+            None => return Ok("Export cancelled".to_string()),
+        };
+
+        // Create zip file
+        let file = std::fs::File::create(&target_path).map_err(|e| format!("Failed to create file: {}", e))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o755);
+
+        let walkdir = walkdir::WalkDir::new(&plugin_dir);
+        let it = walkdir.into_iter();
+
+        for entry in it {
+            let entry = entry.map_err(|e| format!("Failed to walk directory: {}", e))?;
+            let path = entry.path();
+            
+            // Calculate relative path
+            let name = path.strip_prefix(&plugin_dir)
+                .map_err(|e| format!("Failed to strip prefix: {}", e))?
+                .to_str()
+                .ok_or("Invalid path encoding")?;
+                
+            // Convert backslashes to forward slashes for zip compatibility
+            let name = name.replace('\\', "/");
+
+            if name.is_empty() {
+                continue;
+            }
+
+            if path.is_file() {
+                zip.start_file(name, options).map_err(|e| format!("Failed to start file in zip: {}", e))?;
+                let mut f = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+                std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to write file to zip: {}", e))?;
+            } else if !name.is_empty() {
+                // zip.add_directory(name, options).map_err(...) // Optional for directories
+            }
+        }
+        
+        zip.finish().map_err(|e| format!("Failed to finish zip: {}", e))?;
+        
+        Ok::<String, String>("Export successful".to_string())
+    }).await;
+
+    match result {
+        Ok(Ok(msg)) => Json(ApiResponse { retcode: 0, data: msg }),
+        Ok(Err(e)) => Json(ApiResponse { retcode: 1, data: e }),
+        Err(e) => Json(ApiResponse { retcode: 1, data: format!("Task failed: {}", e) }),
+    }
+}
+
+#[post("/plugins/<plugin_id>/uninstall")]
+pub async fn uninstall_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+    match manager.delete_plugin(&plugin_id).await {
+        Ok(_) => {
+            log_info!("Plugin {} uninstalled", plugin_id);
+            Json(ApiResponse {
+                retcode: 0,
+                data: format!("Plugin {} uninstalled successfully", plugin_id),
+            })
+        }
+        Err(e) => {
+            log_error!("Failed to uninstall plugin {}: {}", plugin_id, e);
+            Json(ApiResponse {
+                retcode: 1,
+                data: format!("Failed to uninstall plugin: {}", e),
+            })
+        }
+    }
+}
+
+#[post("/plugins/import")]
+pub async fn import_plugin(plugin_manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+    let plugins_root = plugin_manager.get_plugins_root();
+    
+    let result = tokio::task::spawn_blocking(move || {
+        // Open file dialog
+        let target_path = rfd::FileDialog::new()
+            .add_filter("Yuyu Plugin", &["yuyu.7z"])
+            .pick_file();
+            
+        let target_path = match target_path {
+            Some(p) => p,
+            None => return Ok("Import cancelled".to_string()),
+        };
+
+        let filename = target_path.file_name()
+            .ok_or("Invalid filename")?
+            .to_string_lossy()
+            .to_string();
+
+        if !filename.ends_with(".yuyu.7z") {
+            return Err("Invalid plugin file. Must end with .yuyu.7z".to_string());
+        }
+
+        // Determine plugin ID from filename
+        // e.g. "myplugin.yuyu.7z" -> "myplugin"
+        let file_stem = target_path.file_stem()
+            .ok_or("Invalid filename")?
+            .to_string_lossy()
+            .to_string();
+            
+        // If it ends with .yuyu, remove it
+        let plugin_id = if file_stem.ends_with(".yuyu") {
+            file_stem.trim_end_matches(".yuyu").to_string()
+        } else {
+            file_stem
+        };
+
+        if plugin_id.is_empty() {
+             return Err("Could not determine plugin ID from filename".to_string());
+        }
+
+        let target_dir = plugins_root.join(&plugin_id);
+        
+        if target_dir.exists() {
+            return Err(format!("Plugin directory already exists: {}", plugin_id));
+        }
+
+        // Create target directory
+        std::fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
+
+        // Open zip file
+        let file = std::fs::File::open(&target_path).map_err(|e| format!("Failed to open file: {}", e))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+
+        // Extract files
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).map_err(|e| format!("Failed to read file from zip: {}", e))?;
+            let outpath = match file.enclosed_name() {
+                Some(path) => target_dir.join(path),
+                None => continue,
+            };
+
+            if (*file.name()).ends_with('/') {
+                std::fs::create_dir_all(&outpath).map_err(|e| format!("Failed to create directory: {}", e))?;
+            } else {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        std::fs::create_dir_all(p).map_err(|e| format!("Failed to create directory: {}", e))?;
+                    }
+                }
+                let mut outfile = std::fs::File::create(&outpath).map_err(|e| format!("Failed to create file: {}", e))?;
+                std::io::copy(&mut file, &mut outfile).map_err(|e| format!("Failed to write file: {}", e))?;
+            }
+
+            // Get and Set permissions
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = file.unix_mode() {
+                    std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode)).unwrap();
+                }
+            }
+        }
+
+        Ok::<String, String>(format!("Plugin {} imported successfully", plugin_id))
+    }).await;
+
+    match result {
+        Ok(Ok(msg)) => Json(ApiResponse { retcode: 0, data: msg }),
+        Ok(Err(e)) => Json(ApiResponse { retcode: 1, data: e }),
+        Err(e) => Json(ApiResponse { retcode: 1, data: format!("Task failed: {}", e) }),
     }
 }

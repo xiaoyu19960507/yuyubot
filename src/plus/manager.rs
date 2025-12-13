@@ -55,6 +55,15 @@ impl PluginManager {
         self.status_sender.subscribe()
     }
 
+    pub async fn get_plugin_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        let plugins = self.plugins.read().await;
+        plugins.get(plugin_id).map(|p| p.plugin_dir.clone())
+    }
+
+    pub fn get_plugins_root(&self) -> PathBuf {
+        self.exe_dir.join("app")
+    }
+
     fn get_config_path(&self) -> PathBuf {
         self.exe_dir.join("config").join("plugins.json")
     }
@@ -351,6 +360,14 @@ impl PluginManager {
 
                     // 进程结束
                     plugin_clone.set_process_alive(false);
+
+                    // 进程结束后清理 tmp 目录
+                    if plugin_clone.tmp_dir.exists() {
+                        // 等待一小段时间确保进程完全释放文件锁
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        let _ = std::fs::remove_dir_all(&plugin_clone.tmp_dir);
+                    }
+
                     {
                         let plugin_inner = plugin_clone.clone();
                         let was_stopped = plugin_clone.should_stop();
@@ -382,6 +399,12 @@ impl PluginManager {
                 Err(e) => {
                     // 启动失败，保持 enabled = true（用户可能想重试）
                     plugin_clone.set_process_alive(false);
+
+                    // 清理 tmp 目录
+                    if plugin_clone.tmp_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&plugin_clone.tmp_dir);
+                    }
+
                     let err_msg = format!("[错误] 启动插件失败: {}", e);
                     let plugin_inner = plugin_clone.clone();
                     let sender = output_sender.clone();
@@ -416,20 +439,11 @@ impl PluginManager {
         // 设置停止标志，让读取线程退出
         plugin.set_should_stop(true);
 
-        // 标记进程为不存活
-        plugin.set_process_alive(false);
-        plugin.set_status(PluginStatus::Stopped).await;
-        
         // 只有用户主动停止时才设置为禁用
         if is_user_action {
             plugin.set_enabled(false).await;
             // 从配置中移除启用状态
             self.remove_enabled_plugin(plugin_id);
-        }
-
-        // 删除 tmp 目录
-        if plugin.tmp_dir.exists() {
-            let _ = std::fs::remove_dir_all(&plugin.tmp_dir);
         }
 
         Ok(())
@@ -454,6 +468,33 @@ impl PluginManager {
         }
 
         Ok(())
+    }
+
+    pub async fn delete_plugin(&self, plugin_id: &str) -> Result<(), String> {
+        let mut plugins = self.plugins.write().await;
+        
+        // 检查插件是否存在
+        if let Some(plugin) = plugins.get(plugin_id) {
+            // 检查插件是否正在运行
+            if plugin.get_status().await == PluginStatus::Running {
+                return Err("Cannot delete a running plugin. Please stop it first.".to_string());
+            }
+            
+            // 删除插件目录（保留数据目录）
+            if plugin.plugin_dir.exists() {
+                std::fs::remove_dir_all(&plugin.plugin_dir).map_err(|e| format!("Failed to delete plugin directory: {}", e))?;
+            }
+            
+            // 从内存中移除
+            plugins.remove(plugin_id);
+            
+            // 确保从配置中移除
+            self.remove_enabled_plugin(plugin_id);
+            
+            Ok(())
+        } else {
+            Err("Plugin not found".to_string())
+        }
     }
 
     pub async fn stop_all_plugins(&self) {

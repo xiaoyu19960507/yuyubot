@@ -80,15 +80,19 @@
     .version-status svg { width: 14px; height: 14px; }
     .version-link { font-size: 12px; color: var(--accent-color); text-decoration: none; cursor: pointer; }
     .version-link:hover { text-decoration: underline; }
-    .btn-primary { display: inline-flex; align-items: center; gap: 6px; background-color: var(--accent-color); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background-color: var(--accent-color); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
     .btn-primary:hover { opacity: 0.9; }
     .btn-primary svg { width: 16px; height: 16px; }
-    .btn-success { display: inline-flex; align-items: center; gap: 6px; background-color: #4caf50; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn-success { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background-color: #4caf50; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
     .btn-success:hover { opacity: 0.9; }
     .btn-success svg { width: 16px; height: 16px; }
-    .btn-warning { display: inline-flex; align-items: center; gap: 6px; background-color: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn-warning { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background-color: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
     .btn-warning:hover { opacity: 0.9; }
     .btn-warning svg { width: 16px; height: 16px; }
+    .btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background-color: #f44336; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-danger svg { width: 16px; height: 16px; }
+    .btn-danger:disabled { background-color: #e57373; cursor: not-allowed; opacity: 0.7; }
     .btn-center { display: flex; justify-content: center; margin: 20px 0; }
     .links-list { list-style: none; }
     .links-list li { margin-bottom: 12px; }
@@ -163,6 +167,69 @@
     .output-line { padding: 4px 0; border-bottom: 1px solid var(--border-color); word-break: break-all; }
     .output-line:last-child { border-bottom: none; }
     .plugin-list-container { max-height: calc(100vh - 280px); overflow-y: auto; }
+    
+    /* Toast Styles */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .toast {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      padding: 10px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      border: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 200px;
+      max-width: 400px;
+      animation: slideDown 0.3s ease;
+      pointer-events: auto;
+    }
+    .toast.success { border-left: 4px solid #4caf50; }
+    .toast.error { border-left: 4px solid #f44336; }
+    .toast.info { border-left: 4px solid #2196f3; }
+    @keyframes slideDown {
+      from { transform: translateY(-20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Modal Styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      animation: fadeIn 0.2s ease;
+    }
+    .modal {
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      width: 90%;
+      max-width: 400px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      padding: 20px;
+      animation: scaleIn 0.2s ease;
+    }
+    .modal-header { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+    .modal-body { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.5; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 10px; }
+    .btn-text { background: none; border: none; padding: 8px 16px; cursor: pointer; color: var(--text-secondary); font-size: 14px; border-radius: 6px; transition: background-color 0.2s; }
+    .btn-text:hover { background-color: var(--hover-bg); color: var(--text-primary); }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   </style>
 </head>
 <body>
@@ -198,6 +265,16 @@
     <bot-page v-if="currentPage === 'bot'" :bot-config="botConfig"></bot-page>
     <about-page v-if="currentPage === 'about'"></about-page>
   </main>
+  
+  <!-- Toast Container -->
+  <div class="toast-container">
+    <div v-for="toast in toasts" :key="toast.id" class="toast" :class="toast.type">
+      <svg v-if="toast.type === 'success'" viewBox="0 0 24 24" fill="none" stroke="#4caf50" stroke-width="2" width="20" height="20"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      <svg v-if="toast.type === 'error'" viewBox="0 0 24 24" fill="none" stroke="#f44336" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+      <svg v-if="toast.type === 'info'" viewBox="0 0 24 24" fill="none" stroke="#2196f3" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+      <span>{{ toast.message }}</span>
+    </div>
+  </div>
 </div>
 <script>
 const { createApp, ref, onMounted, watch } = Vue;
@@ -206,9 +283,24 @@ const app = createApp({
   setup() {
     const isDark = ref(false);
     const currentPage = ref('logs');
+    const toasts = ref([]);
+    let toastId = 0;
+    
+    const showToast = (message, type = 'info') => {
+      const id = toastId++;
+      toasts.value.push({ id, message, type });
+      setTimeout(() => {
+        const index = toasts.value.findIndex(t => t.id === id);
+        if (index !== -1) toasts.value.splice(index, 1);
+      }, 3000);
+    };
+    
+    // Expose showToast globally
+    window.showToast = showToast;
+    
     const userAvatar = ref('');
     const navItems = [
-      { id: 'plugins', name: '插件', icon: '<circle cx="12" cy="12" r="1"></circle><path d="M12 1v6m0 6v6"></path><path d="M4.22 4.22l4.24 4.24m2.12 2.12l4.24 4.24"></path><path d="M1 12h6m6 0h6"></path><path d="M4.22 19.78l4.24-4.24m2.12-2.12l4.24-4.24"></path><path d="M19.78 19.78l-4.24-4.24m-2.12-2.12l-4.24-4.24"></path><path d="M19.78 4.22l-4.24 4.24m-2.12 2.12l-4.24 4.24"></path>' },
+      { id: 'plugins', name: '插件', icon: '<rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect>' },
       { id: 'logs', name: '日志', icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>' },
       { id: 'system', name: '系统', icon: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>' },
       { id: 'bot', name: 'BOT', icon: '<line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line>' },
@@ -318,6 +410,7 @@ const app = createApp({
       isDark,
       userAvatar,
       currentPage,
+      toasts,
       navItems,
       logs,
       systemConfig,

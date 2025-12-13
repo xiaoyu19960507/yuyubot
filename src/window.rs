@@ -98,11 +98,13 @@ fn show_or_create_main_window(
 ) {
     if let Some(id) = *main_window_id {
         if let Some((window, _)) = webviews.get(&id) {
-            window.set_minimized(false);
-            window.set_visible(true);
-            window.set_focus();
-            window.set_always_on_top(true);
-            window.set_always_on_top(false);
+
+            window.set_minimized(false); // 取消最小化
+            window.set_visible(true);  //设置可见
+            window.set_focus();         //设置焦点
+            window.set_always_on_top(true); // 开启置顶
+            window.set_always_on_top(false); // 关闭置顶
+            
             return;
         } else {
             *main_window_id = None;

@@ -52,6 +52,42 @@ const AboutPage = {
         </div>
       </div>
       <div class="card">
+        <div class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            制作团队
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+          
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #6b5b95; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">C</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">Claude Opus 4.5</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">第一作者</div>
+                <div style="font-size: 12px; color: var(--accent-color);">赛博领航员</div>
+             </div>
+          </div>
+
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #4caf50; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">Gemini3 Pro Preview</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">第二作者</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">极速智囊团</div>
+             </div>
+          </div>
+
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #ff9800; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">S</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">super1207</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">通信作者</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">碳基工具人</div>
+             </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="card">
         <div class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>相关链接</div>
         <ul class="links-list">
           <li><a href="https://qm.qq.com/cgi-bin/qm/qr?k=s8AQdoqzhKk9NoZsGcRuuWt2DVh1mqwc&jump_from=webapi&authKey=Rax8cfJvNfGaHOgC8ocPdS3TrA0FW5wSEfWTvRPcGG8WYIG0UmMIqXE2wTPDR9QK" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>群 · 2155039992</a></li>

@@ -1,111 +1,279 @@
-# yuyubot
+# YuyuBot
 
-yuyubot 是一个基于 Rust 构建的现代化桌面端 Bot 管理框架，专为 **Milky 协议** 设计。它提供了一个轻量级、高性能的图形化界面，用于管理 Bot 连接、插件运行及日志监控。
+YuyuBot 是一个为 Milky 协议设计的桌面端 Bot 管理框架。通过图形界面管理 Bot 连接和插件运行，让你专注于插件开发。
 
-## ✨ 核心特性
+## 功能概览
 
-- **🚀 现代化技术栈**
-  - **后端**：Rust (Rocket + Tokio + Expectrl)，极致性能与内存安全。
-  - **前端**：Vue.js + WebView (Tao/Wry)，提供原生级桌面体验，无需 Electron 的庞大体积。
-  - **通信**：基于 SSE (Server-Sent Events) 的实时数据流。
+### Bot 连接管理
 
-- **🔌 强大的插件系统**
-  - **进程隔离**：每个插件在独立的子进程中运行，互不干扰，崩溃不影响主程序。
-  - **无缝集成**：自动将 Bot 连接信息（Host, Port, Token）注入插件环境变量。
-  - **实时监控**：在界面中实时查看每个插件的标准输出 (stdout/stderr) 日志。
-  - **热插拔**：支持动态启用/禁用插件，无需重启主程序。
+- 配置 Milky 协议服务端的连接参数（Host、API 端口、事件端口、Token）
+- 实时显示连接状态
+- 断线自动重连
+- 支持记住连接配置，下次启动自动连接
 
-- **🤖 Milky 协议支持**
-  - 完美对接 Milky 协议服务端。
-  - 支持 Token 鉴权。
-  - 自动断线重连。
+### 插件管理
 
-- **📊 可视化管理**
-  - **仪表盘**：查看系统状态、Bot 连接状态。
-  - **日志中心**：统一的日志查看器，支持按插件筛选和实时滚动。
-  - **配置管理**：图形化配置 Bot 连接参数，无需手动修改 JSON 文件。
+- 图形化管理插件的启动和停止
+- 插件进程隔离，单个插件崩溃不影响其他插件和主程序
+- 实时查看每个插件的输出日志
+- 支持插件的导入（zip）和导出
+- 记住已启用的插件，下次启动自动运行
 
-## 🛠️ 项目结构
+### 日志系统
 
-```
-yuyubot/
-├── src/                # Rust 后端源码
-│   ├── plus/           # 插件管理系统 (Manager, Plugin, Process)
-│   ├── server/         # Web API & Bot 连接逻辑
-│   ├── logger.rs       # 日志系统
-│   └── main.rs         # 程序入口
-├── res/                # 前端资源 (Vue.js 应用)
-│   ├── pages/          # Vue 组件页面
-│   ├── index.html      # 前端入口
-│   └── ...
-└── Cargo.toml          # 依赖配置
-```
+- 统一的日志查看界面
+- 支持查看框架日志和插件日志
+- 实时日志推送
+- 支持清空日志
 
-## 🚀 快速开始
+### 数据管理
 
-### 前置要求
+- 每个插件拥有独立的数据目录
+- 一键打开数据目录
 
-- [Rust](https://www.rust-lang.org/) (Stable)
-- Windows 10/11 (目前主要支持 Windows)
+### 本地转发（计划中）
 
-### 运行开发环境
+- 为 Milky 协议提供本地转发代理
+- 多个插件共享同一连接，减少重复请求
+- 节约网络流量，降低服务端压力
 
-```bash
-cargo run
-```
+### 插件菜单（计划中）
 
-### 构建发布版本
+- 插件可自行开启 Web 服务器作为配置界面
+- 在插件管理界面中直接访问插件菜单
 
-```bash
-cargo build --release
-```
+### 优雅退出（计划中）
 
-构建完成后，可执行文件位于 `target/release/yuyubot.exe`。
+- 当插件开启了 Web 服务器时，程序退出前会向插件发送退出请求
+- 给予插件清理资源和保存数据的机会
 
-## 🧩 插件开发指南
+### 插件间通信（计划中）
 
-yuyubot 的插件是独立的**可执行程序**（可以是 Python 脚本、Node.js 程序或编译后的二进制文件）。
+- 通过 Web 服务器实现插件之间的相互通信
+- 支持插件间数据交换和协作
 
-### 1. 插件结构
+---
 
-在 `app/` 目录下创建一个新文件夹（例如 `my-plugin`），结构如下：
+## 插件开发指南
+
+YuyuBot 的插件是**独立的可执行程序**，可以用任何语言编写：Python、Node.js、Go、Rust、甚至是批处理脚本。
+
+### 创建插件
+
+在程序目录下的 `app/` 文件夹中创建一个新目录，目录名即为插件 ID：
 
 ```
 app/
-└── my-plugin/
-    ├── app.json        # 插件描述文件
-    ├── main.exe        # 插件入口 (或 main.py, index.js 等)
-    └── ...             # 其他依赖文件
+└── my-plugin/          # 插件ID: my-plugin
+    ├── app.json        # 必需：插件描述文件
+    ├── main.py         # 入口程序（示例）
+    └── ...             # 其他文件
 ```
 
-### 2. app.json 规范
+### app.json 配置
 
 ```json
 {
-  "name": "示例插件",
+  "name": "我的插件",
   "version": "1.0.0",
-  "description": "这是一个测试插件",
-  "entry": "main.exe",  // 插件启动入口命令
+  "description": "这是一个示例插件",
+  "entry": "python main.py",
   "author": "Your Name"
 }
 ```
 
-### 3. 环境变量注入
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| name | 是 | 插件显示名称 |
+| version | 是 | 版本号 |
+| description | 是 | 插件描述 |
+| entry | 是 | 启动命令，支持带参数 |
+| author | 否 | 作者 |
 
-yuyubot 会在启动插件时自动注入以下环境变量，供插件连接 Bot 使用：
+entry 示例：
+- `main.exe` - 直接运行可执行文件
+- `python main.py` - 使用系统 Python 运行
+- `node index.js` - 使用 Node.js 运行
 
-| 环境变量名 | 描述 |
-|------------|------|
-| `YUYU_HOST` | Bot API 主机地址 (例如 `127.0.0.1`) |
-| `YUYU_API_PORT` | HTTP API 端口 |
-| `YUYU_EVENT_PORT` | 事件流端口 |
-| `YUYU_TOKEN` | 鉴权 Token (如果有) |
-| `YUYU_DATA_DIR` | 插件专属数据目录 (例如 `data/my-plugin`) |
+### 环境变量
 
-### 4. 日志输出
+YuyuBot 启动插件时会自动注入以下环境变量，用于连接 Bot：
 
-插件只需向 **标准输出 (stdout)** 打印内容，yuyubot 会自动捕获并在“日志”页面显示。
+| 环境变量 | 说明 | 示例值 |
+|----------|------|--------|
+| `YUYU_HOST` | Bot 服务主机地址 | `127.0.0.1` |
+| `YUYU_API_PORT` | HTTP API 端口 | `3010` |
+| `YUYU_EVENT_PORT` | 事件流端口 | `3011` |
+| `YUYU_TOKEN` | 鉴权 Token（如果配置了） | `your-token` |
+| `YUYU_DATA_DIR` | 插件专属数据目录的绝对路径 | `C:\...\data\my-plugin` |
 
-## 📄 许可证
+### 日志输出
 
-本项目未指定特定的开源许可证。
+插件只需向**标准输出 (stdout)** 打印内容，YuyuBot 会自动捕获并在界面中显示。无需额外配置。
+
+```python
+# Python 示例
+print("插件已启动")
+print(f"连接到 {os.environ['YUYU_HOST']}:{os.environ['YUYU_API_PORT']}")
+```
+
+### 数据存储
+
+使用 `YUYU_DATA_DIR` 环境变量获取插件专属的数据目录路径，用于存储配置、缓存等持久化数据：
+
+```python
+import os
+import json
+
+data_dir = os.environ['YUYU_DATA_DIR']
+config_path = os.path.join(data_dir, 'config.json')
+
+# 读取配置
+if os.path.exists(config_path):
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+```
+
+### 连接 Bot
+
+> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
+
+使用注入的环境变量构建 API 地址：
+
+```python
+import os
+import requests
+
+host = os.environ['YUYU_HOST']
+api_port = os.environ['YUYU_API_PORT']
+token = os.environ.get('YUYU_TOKEN', '')
+
+# 构建 API URL
+api_url = f"http://{host}:{api_port}/api"
+
+# 发送请求
+headers = {}
+if token:
+    headers['Authorization'] = f'Bearer {token}'
+
+response = requests.post(f"{api_url}/send_message", json={
+    "group_id": 123456,
+    "message": "Hello!"
+}, headers=headers)
+```
+
+### 监听事件
+
+> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
+
+连接事件流端口获取实时事件：
+
+```python
+import os
+import requests
+
+host = os.environ['YUYU_HOST']
+event_port = os.environ['YUYU_EVENT_PORT']
+token = os.environ.get('YUYU_TOKEN', '')
+
+event_url = f"http://{host}:{event_port}/event"
+
+headers = {'Accept': 'text/event-stream'}
+if token:
+    headers['Authorization'] = f'Bearer {token}'
+
+# SSE 事件流
+response = requests.get(event_url, headers=headers, stream=True)
+for line in response.iter_lines():
+    if line:
+        line = line.decode('utf-8')
+        if line.startswith('data: '):
+            data = line[6:]
+            print(f"收到事件: {data}")
+```
+
+### 完整示例
+
+> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
+
+一个简单的复读机插件：
+
+```python
+#!/usr/bin/env python3
+import os
+import json
+import requests
+
+# 从环境变量获取配置
+HOST = os.environ['YUYU_HOST']
+API_PORT = os.environ['YUYU_API_PORT']
+EVENT_PORT = os.environ['YUYU_EVENT_PORT']
+TOKEN = os.environ.get('YUYU_TOKEN', '')
+
+API_URL = f"http://{HOST}:{API_PORT}/api"
+EVENT_URL = f"http://{HOST}:{EVENT_PORT}/event"
+
+def get_headers():
+    headers = {}
+    if TOKEN:
+        headers['Authorization'] = f'Bearer {TOKEN}'
+    return headers
+
+def send_group_message(group_id, message):
+    requests.post(f"{API_URL}/send_group_msg", json={
+        "group_id": group_id,
+        "message": message
+    }, headers=get_headers())
+
+def main():
+    print("复读机插件已启动")
+    
+    headers = get_headers()
+    headers['Accept'] = 'text/event-stream'
+    
+    response = requests.get(EVENT_URL, headers=headers, stream=True)
+    
+    for line in response.iter_lines():
+        if not line:
+            continue
+        
+        line = line.decode('utf-8')
+        if not line.startswith('data: '):
+            continue
+        
+        try:
+            event = json.loads(line[6:])
+            
+            # 处理群消息
+            if event.get('post_type') == 'message' and event.get('message_type') == 'group':
+                group_id = event['group_id']
+                message = event['raw_message']
+                
+                # 复读
+                if message.startswith('/echo '):
+                    content = message[6:]
+                    send_group_message(group_id, content)
+                    print(f"复读: {content}")
+        
+        except json.JSONDecodeError:
+            pass
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+## 构建
+
+```bash
+# 开发运行
+cargo run
+
+# 发布构建
+cargo build --release
+```
+
+## 系统要求
+
+- Windows 10/11

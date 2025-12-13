@@ -9,6 +9,13 @@ const PluginsPage = {
       statusEventSource: null,
       loading: false,
       autoScroll: true,
+      pendingStatusUpdates: {},
+      confirmDialog: {
+        show: false,
+        title: '',
+        message: '',
+        onConfirm: null
+      }
     };
   },
   template: `
@@ -18,18 +25,23 @@ const PluginsPage = {
         <h1>插件管理</h1>
       </div>
       
-      <div class="card">
-        <div class="card-title">
+      <div class="card" style="height: calc(100vh - 170px); display: flex; flex-direction: column;">
+        <div class="card-title" style="flex-shrink: 0;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
           插件列表
-          <label v-if="selectedPlugin" class="toggle-switch" style="margin-left: auto; font-weight: normal; font-size: 14px;">
-            <input type="checkbox" v-model="autoScroll">
-            <span class="toggle-slider"></span>
-            <span class="toggle-label">自动滚动</span>
-          </label>
+          <div style="margin-left: auto; display: flex; align-items: center; gap: 10px;">
+            <button class="btn-primary" @click="importPlugin" :disabled="loading" style="padding: 6px 12px; text-align: center;">
+              导入插件
+            </button>
+            <label v-if="selectedPlugin" class="toggle-switch" style="font-weight: normal; font-size: 14px; margin: 0;">
+              <input type="checkbox" v-model="autoScroll">
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">自动滚动</span>
+            </label>
+          </div>
         </div>
         
-        <div class="plugin-list-container">
+        <div class="plugin-list-container" style="flex: 1; min-height: 0;">
           <div v-if="plugins.length === 0" style="text-align: center; color: var(--text-secondary); padding: 40px;">
             <p>暂无插件</p>
             <p style="font-size: 12px; margin-top: 10px;">请在 app 目录下创建插件文件夹</p>
@@ -48,7 +60,10 @@ const PluginsPage = {
               </div>
             </div>
             <div class="plugin-actions">
-
+              <button class="btn-primary" @click.stop="exportPlugin(plugin.id)" :disabled="loading" style="margin-right: 5px;" title="导出插件">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                导出
+              </button>
               <button v-if="!plugin.enabled" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 启动
@@ -56,6 +71,10 @@ const PluginsPage = {
               <button v-else class="btn-warning" @click.stop="stopPlugin(plugin.id)" :disabled="loading">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
                 停止
+              </button>
+              <button class="btn-danger" @click.stop="uninstallPlugin(plugin.id)" :disabled="loading || plugin.status === 'running'" title="卸载插件">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                卸载
               </button>
             </div>
           </div>
@@ -76,6 +95,18 @@ const PluginsPage = {
             </div>
           </div>
         </div>
+        </div>
+      </div>
+      
+      <!-- Confirmation Modal -->
+      <div v-if="confirmDialog.show" class="modal-overlay" @click="confirmDialog.show = false">
+        <div class="modal" @click.stop>
+          <div class="modal-header">{{ confirmDialog.title }}</div>
+          <div class="modal-body">{{ confirmDialog.message }}</div>
+          <div class="modal-footer">
+            <button class="btn-text" @click="confirmDialog.show = false">取消</button>
+            <button class="btn-primary" @click="confirmAction">确定</button>
+          </div>
         </div>
       </div>
     </div>
@@ -116,6 +147,94 @@ const PluginsPage = {
         this.selectedPlugin = id;
       }
     },
+    confirmAction() {
+      if (this.confirmDialog.onConfirm) {
+        this.confirmDialog.onConfirm();
+      }
+      this.confirmDialog.show = false;
+    },
+    importPlugin() {
+      this.loading = true;
+      fetch('/api/plugins/import', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.retcode === 0) {
+            if (data.data === "Import cancelled") {
+              window.showToast('导入已取消', 'info');
+            } else {
+              window.showToast('导入成功: ' + data.data, 'success');
+              this.loadPlugins();
+            }
+          } else {
+            window.showToast('导入失败: ' + data.data, 'error');
+          }
+        })
+        .catch(err => {
+          console.error('Failed to import plugin:', err);
+          window.showToast('导入失败: ' + err, 'error');
+        })
+        .finally(() => { this.loading = false; });
+    },
+    exportPlugin(id) {
+      this.confirmDialog = {
+        show: true,
+        title: '导出插件',
+        message: '确定要导出插件 ' + id + ' 吗？',
+        onConfirm: () => {
+          this.loading = true;
+          fetch('/api/plugins/export', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ plugin_id: id })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.retcode === 0) {
+              window.showToast('导出成功！', 'success');
+            } else {
+              window.showToast('导出失败: ' + data.data, 'error');
+            }
+          })
+          .catch(err => {
+            console.error('Failed to export plugin:', err);
+            window.showToast('导出失败: ' + err, 'error');
+          })
+          .finally(() => { this.loading = false; });
+        }
+      };
+    },
+    uninstallPlugin(id) {
+      const plugin = this.plugins.find(p => p.id === id);
+      if (plugin && plugin.status === 'running') {
+        window.showToast('无法卸载正在运行的插件，请先停止插件', 'error');
+        return;
+      }
+      this.confirmDialog = {
+        show: true,
+        title: '卸载插件',
+        message: '确定要卸载插件 ' + id + ' 吗？\n这将删除插件文件夹，但保留数据目录。',
+        onConfirm: () => {
+          this.loading = true;
+          fetch('/api/plugins/' + encodeURIComponent(id) + '/uninstall', {
+              method: 'POST'
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.retcode === 0) {
+              window.showToast('卸载成功', 'success');
+              this.loadPlugins();
+            } else {
+              window.showToast('卸载失败: ' + data.data, 'error');
+            }
+          })
+          .catch(err => {
+            console.error('Failed to uninstall plugin:', err);
+            window.showToast('卸载失败: ' + err, 'error');
+          })
+          .finally(() => { this.loading = false; });
+        }
+      };
+    },
     loadPlugins() {
       this.loading = true;
       fetch('/api/plugins/list')
@@ -132,8 +251,18 @@ const PluginsPage = {
               if (output.length > MAX_OUTPUT_LINES) {
                 output = output.slice(-MAX_OUTPUT_LINES);
               }
+              
+              // 应用挂起的状态更新
+              if (this.pendingStatusUpdates[p.id]) {
+                  const update = this.pendingStatusUpdates[p.id];
+                  p.status = update.status;
+                  p.enabled = update.enabled;
+              }
+              
               return { ...p, output };
             });
+            // 清除已应用的更新
+            this.pendingStatusUpdates = {};
           }
         })
         .catch(err => console.error('Failed to load plugins:', err))
@@ -256,6 +385,12 @@ const PluginsPage = {
           if (plugin) {
             plugin.status = statusEvent.status;
             plugin.enabled = statusEvent.enabled;
+          } else {
+            // 如果插件列表尚未加载或找不到插件，保存到挂起更新中
+            this.pendingStatusUpdates[statusEvent.plugin_id] = {
+                status: statusEvent.status,
+                enabled: statusEvent.enabled
+            };
           }
         } catch (err) {
           console.error('Failed to parse plugin status:', err);
