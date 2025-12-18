@@ -32,6 +32,7 @@ ws = { package = "rocket_ws", version = "0.1.1" }
 rfd = "0.14"
 rand = "0.8"
 sevenz-rust2 = {"git" = "https://github.com/super1207/sevenz-rust2"}
+strip-ansi-escapes = "0.2.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Console"] }

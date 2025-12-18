@@ -30,10 +30,10 @@ lazy_static! {
 
 pub fn init_logger() {
     // 初始化 tracing 订阅者
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(true)
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_writer(std::io::stderr)
+    //     .with_ansi(true)
+    //     .init();
 }
 
 pub fn log_message(level: &str, source: &str, message: String) {

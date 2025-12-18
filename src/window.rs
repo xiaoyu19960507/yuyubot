@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tao::{
@@ -161,6 +160,7 @@ fn show_or_create_main_window(
 fn load_icon_data() -> Option<(Vec<u8>, u32, u32)> {
     #[cfg(debug_assertions)]
     {
+        use std::path::Path;
         let path = Path::new("res/favicon.ico");
         let image = image::open(path).ok()?.to_rgba8();
         let (width, height) = image.dimensions();

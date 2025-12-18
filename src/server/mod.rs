@@ -206,6 +206,7 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                 let config = Config {
                     address,
                     port,
+                    log_level: rocket::config::LogLevel::Off,
                     ..Config::default()
                 };
                 let _rocket = rocket::custom(config)

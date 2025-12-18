@@ -434,8 +434,10 @@ impl PluginManager {
                                         match session.try_read(&mut buf) {
                                             Ok(0) => break,
                                             Ok(n) => {
-                                                let text =
-                                                    String::from_utf8_lossy(&buf[..n]).to_string();
+                                                let bytes = &buf[..n];
+                                                // 去除 ANSI 转义序列
+                                                let stripped = strip_ansi_escapes::strip(bytes);
+                                                let text = String::from_utf8_lossy(&stripped).to_string();
                                                 process_output(
                                                     &rt_handle,
                                                     &plugin_clone,
@@ -474,7 +476,10 @@ impl PluginManager {
                                 match session.try_read(&mut buf) {
                                     Ok(0) => break,
                                     Ok(n) => {
-                                        let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                                        let bytes = &buf[..n];
+                                        // 去除 ANSI 转义序列
+                                        let stripped = strip_ansi_escapes::strip(bytes);
+                                        let text = String::from_utf8_lossy(&stripped).to_string();
                                         process_output(
                                             &rt_handle,
                                             &plugin_clone,
@@ -499,7 +504,10 @@ impl PluginManager {
                                 break;
                             }
                             Ok(n) => {
-                                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                                let bytes = &buf[..n];
+                                // 去除 ANSI 转义序列
+                                let stripped = strip_ansi_escapes::strip(bytes);
+                                let text = String::from_utf8_lossy(&stripped).to_string();
                                 process_output(
                                     &rt_handle,
                                     &plugin_clone,
