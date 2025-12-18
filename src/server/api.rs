@@ -1,5 +1,7 @@
 use crate::logger;
 use crate::plus::PluginManager;
+use crate::server::MainProxy;
+use crate::window::UserEvent;
 use rfd;
 use rocket::{
     get,
@@ -12,6 +14,7 @@ use rocket::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -29,7 +32,7 @@ pub struct LogsResponse {
 
 #[derive(Serialize)]
 pub struct SystemInfo {
-    pub port: u16,
+    pub port: AtomicU16,
     pub data_dir: String,
 }
 
@@ -102,7 +105,7 @@ pub async fn set_webui_port(
 }
 
 #[get("/ui/state")]
-pub fn get_ui_state() -> Json<ApiResponse<UiState>> {
+pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
@@ -110,25 +113,25 @@ pub fn get_ui_state() -> Json<ApiResponse<UiState>> {
 
     let config_file = exe_dir.join("config").join("ui.json");
 
-    if let Ok(content) = std::fs::read_to_string(&config_file) {
-        if let Ok(state) = serde_json::from_str::<UiState>(&content) {
-            return Json(ApiResponse {
-                retcode: 0,
-                data: state,
-            });
+    let state = if let Ok(content) = tokio::fs::read_to_string(&config_file).await {
+        serde_json::from_str::<UiState>(&content).unwrap_or(UiState {
+            last_page: "logs".to_string(),
+        })
+    } else {
+        UiState {
+            last_page: "logs".to_string(),
         }
-    }
+    };
 
     Json(ApiResponse {
         retcode: 0,
-        data: UiState {
-            last_page: "logs".to_string(),
-        },
+        data: state,
     })
 }
 
 #[post("/ui/state", format = "json", data = "<state>")]
-pub fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
+pub async fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
+    let state_inner = state.into_inner();
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
@@ -137,26 +140,31 @@ pub fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("ui.json");
 
-    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
         return Json(ApiResponse {
             retcode: 1,
             data: format!("Failed to create config directory: {}", e),
         });
     }
 
-    if let Ok(json_str) = serde_json::to_string_pretty(&state.into_inner()) {
-        if let Err(e) = std::fs::write(&config_file, json_str) {
-            return Json(ApiResponse {
-                retcode: 1,
-                data: format!("Failed to write ui config: {}", e),
-            });
+    match serde_json::to_string_pretty(&state_inner) {
+        Ok(json_str) => {
+            if let Err(e) = tokio::fs::write(&config_file, json_str).await {
+                return Json(ApiResponse {
+                    retcode: 1,
+                    data: format!("Failed to write ui config: {}", e),
+                });
+            }
+            Json(ApiResponse {
+                retcode: 0,
+                data: "UI state saved".to_string(),
+            })
         }
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: format!("Failed to serialize ui state: {}", e),
+        }),
     }
-
-    Json(ApiResponse {
-        retcode: 0,
-        data: "UI state saved".to_string(),
-    })
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -227,9 +235,11 @@ pub fn logs_stream() -> EventStream![Event + 'static] {
 }
 
 #[get("/system_info")]
-pub fn get_system_info(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse<SystemInfo>> {
-    let info = SystemInfo {
-        port: system_info.port,
+pub fn get_system_info(
+    system_info: &State<Arc<SystemInfo>>,
+) -> Json<ApiResponse<SystemInfoResponse>> {
+    let info = SystemInfoResponse {
+        port: system_info.port.load(Ordering::SeqCst),
         data_dir: system_info.data_dir.clone(),
     };
     Json(ApiResponse {
@@ -238,19 +248,44 @@ pub fn get_system_info(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse
     })
 }
 
+#[derive(Serialize)]
+pub struct SystemInfoResponse {
+    pub port: u16,
+    pub data_dir: String,
+}
+
 #[post("/open_data_dir")]
-pub fn open_data_dir(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse<String>> {
-    let path = &system_info.data_dir;
+pub async fn open_data_dir(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse<String>> {
+    let path = system_info.data_dir.clone();
 
-    // 创建目录（如果不存在）
-    let _ = std::fs::create_dir_all(path);
+    let _ = tokio::fs::create_dir_all(&path).await;
 
-    // 打开目录
-    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(&path).spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Fallback for other OS or just do nothing as original code implied windows behavior
+        let _ = std::process::Command::new("explorer").arg(&path).spawn();
+    }
 
     Json(ApiResponse {
         retcode: 0,
         data: "Opening directory".to_string(),
+    })
+}
+
+#[post("/restart_program")]
+pub async fn restart_program(main_proxy: &State<Arc<MainProxy>>) -> Json<ApiResponse<String>> {
+    let proxy_lock = main_proxy.proxy.read().await;
+    if let Some(proxy) = &*proxy_lock {
+        let _ = proxy.send_event(UserEvent::RestartRequested);
+    }
+
+    Json(ApiResponse {
+        retcode: 0,
+        data: "Restarting...".to_string(),
     })
 }
 
@@ -343,7 +378,7 @@ pub fn load_bot_config_from_disk(exe_dir: &std::path::Path) -> BotConfig {
 }
 
 #[get("/bot/get_config")]
-pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
+pub async fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
@@ -351,93 +386,83 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
 
     let config_file = exe_dir.join("config").join("config.json");
 
-    match std::fs::read_to_string(&config_file) {
+    let (retcode, config) = match tokio::fs::read_to_string(&config_file).await {
         Ok(content) => {
             // 尝试解析新格式
             if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
-                return Json(ApiResponse {
-                    retcode: 0,
-                    data: config,
-                });
-            }
+                (0, config)
+            } else {
+                // 尝试解析旧格式并转换
+                match serde_json::from_str::<LegacyBotConfig>(&content) {
+                    Ok(legacy_config) => {
+                        let config = if let (Some(host), Some(api_port), Some(event_port)) = (
+                            legacy_config.host,
+                            legacy_config.api_port,
+                            legacy_config.event_port,
+                        ) {
+                            BotConfig {
+                                host,
+                                api_port,
+                                event_port,
+                                token: legacy_config.token,
+                                auto_connect: legacy_config.auto_connect,
+                            }
+                        } else if let (Some(api), Some(event_sse)) =
+                            (legacy_config.api, legacy_config.event_sse)
+                        {
+                            let (host, api_port) =
+                                parse_url(&api).unwrap_or(("localhost".to_string(), 3010));
+                            let (_, event_port) =
+                                parse_url(&event_sse).unwrap_or(("localhost".to_string(), 3011));
 
-            // 尝试解析旧格式并转换
-            match serde_json::from_str::<LegacyBotConfig>(&content) {
-                Ok(legacy_config) => {
-                    let config = if let (Some(host), Some(api_port), Some(event_port)) = (
-                        legacy_config.host,
-                        legacy_config.api_port,
-                        legacy_config.event_port,
-                    ) {
-                        // 新格式
-                        BotConfig {
-                            host,
-                            api_port,
-                            event_port,
-                            token: legacy_config.token,
-                            auto_connect: legacy_config.auto_connect,
-                        }
-                    } else if let (Some(api), Some(event_sse)) =
-                        (legacy_config.api, legacy_config.event_sse)
-                    {
-                        // 旧格式，尝试解析URL
-                        let (host, api_port) =
-                            parse_url(&api).unwrap_or(("localhost".to_string(), 3010));
-                        let (_, event_port) =
-                            parse_url(&event_sse).unwrap_or(("localhost".to_string(), 3011));
+                            BotConfig {
+                                host,
+                                api_port,
+                                event_port,
+                                token: legacy_config.token,
+                                auto_connect: legacy_config.auto_connect,
+                            }
+                        } else {
+                            BotConfig {
+                                host: "localhost".to_string(),
+                                api_port: 3010,
+                                event_port: 3011,
+                                token: legacy_config.token,
+                                auto_connect: false,
+                            }
+                        };
 
+                        (0, config)
+                    }
+                    Err(_) => (
+                        1,
                         BotConfig {
-                            host,
-                            api_port,
-                            event_port,
-                            token: legacy_config.token,
-                            auto_connect: legacy_config.auto_connect,
-                        }
-                    } else {
-                        // 空配置
-                        BotConfig {
-                            host: "localhost".to_string(),
-                            api_port: 3010,
-                            event_port: 3011,
-                            token: legacy_config.token,
-                            auto_connect: false,
-                        }
-                    };
-
-                    Json(ApiResponse {
-                        retcode: 0,
-                        data: config,
-                    })
-                }
-                Err(e) => {
-                    log_error!("Failed to parse config file: {}", e);
-                    Json(ApiResponse {
-                        retcode: 1,
-                        data: BotConfig {
                             host: "localhost".to_string(),
                             api_port: 3010,
                             event_port: 3011,
                             token: None,
                             auto_connect: false,
                         },
-                    })
+                    ),
                 }
             }
         }
-        Err(_) => {
-            // 配置文件不存在，返回默认配置
-            Json(ApiResponse {
-                retcode: 0,
-                data: BotConfig {
-                    host: "localhost".to_string(),
-                    api_port: 3010,
-                    event_port: 3011,
-                    token: None,
-                    auto_connect: false,
-                },
-            })
-        }
-    }
+        Err(_) => (
+            0,
+            BotConfig {
+                host: "localhost".to_string(),
+                api_port: 3010,
+                event_port: 3011,
+                token: None,
+                auto_connect: false,
+            },
+        ),
+    };
+
+    Json(ApiResponse {
+        retcode,
+        data: config,
+    })
 }
 
 fn parse_url(url: &str) -> Option<(String, u16)> {
@@ -459,6 +484,19 @@ pub async fn save_bot_config(
     bot_state: &State<Arc<crate::server::BotConnectionState>>,
     bot_config_state: &State<Arc<RwLock<BotConfig>>>,
 ) -> Json<ApiResponse<String>> {
+    // 保存配置到JSON文件，不修改auto_connect状态
+    let config_inner = config.into_inner();
+    let json_str = match serde_json::to_string_pretty(&config_inner) {
+        Ok(s) => s,
+        Err(e) => {
+            log_error!("Failed to serialize config: {}", e);
+            return Json(ApiResponse {
+                retcode: 1,
+                data: format!("Failed to serialize config: {}", e),
+            });
+        }
+    };
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
@@ -468,7 +506,7 @@ pub async fn save_bot_config(
     let config_file = config_dir.join("config.json");
 
     // 创建config目录
-    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
         log_error!("Failed to create config directory: {}", e);
         return Json(ApiResponse {
             retcode: 1,
@@ -476,59 +514,43 @@ pub async fn save_bot_config(
         });
     }
 
-    // 保存配置到JSON文件，不修改auto_connect状态
-    let config_inner = config.into_inner();
-    match serde_json::to_string_pretty(&config_inner) {
-        Ok(json_str) => {
-            match std::fs::write(&config_file, json_str) {
-                Ok(_) => {
-                    *bot_config_state.write().await = config_inner.clone();
-
-                    // 尝试连接SSE
-                    let token = config_inner.token.clone();
-                    let sse_url = config_inner.get_event_url();
-                    let bot_state_clone = bot_state.inner().clone();
-
-                    bot_state_clone
-                        .should_connect
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    bot_state_clone
-                        .is_connecting
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-
-                    // 发送状态更新
-                    let status = BotStatusResponse {
-                        connected: false,
-                        connecting: true,
-                    };
-                    let _ = bot_state_clone.status_sender.send(status);
-
-                    tokio::spawn(async move {
-                        connect_bot_sse(&sse_url, token, bot_state_clone).await;
-                    });
-
-                    Json(ApiResponse {
-                        retcode: 0,
-                        data: "Config saved successfully".to_string(),
-                    })
-                }
-                Err(e) => {
-                    log_error!("Failed to write config file: {}", e);
-                    Json(ApiResponse {
-                        retcode: 1,
-                        data: format!("Failed to write config file: {}", e),
-                    })
-                }
-            }
-        }
-        Err(e) => {
-            log_error!("Failed to serialize config: {}", e);
-            Json(ApiResponse {
-                retcode: 1,
-                data: format!("Failed to serialize config: {}", e),
-            })
-        }
+    if let Err(e) = tokio::fs::write(&config_file, json_str).await {
+        log_error!("Failed to write config file: {}", e);
+        return Json(ApiResponse {
+            retcode: 1,
+            data: format!("Failed to write config file: {}", e),
+        });
     }
+
+    *bot_config_state.write().await = config_inner.clone();
+
+    // 尝试连接SSE
+    let token = config_inner.token.clone();
+    let sse_url = config_inner.get_event_url();
+    let bot_state_clone = bot_state.inner().clone();
+
+    bot_state_clone
+        .should_connect
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    bot_state_clone
+        .is_connecting
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // 发送状态更新
+    let status = BotStatusResponse {
+        connected: false,
+        connecting: true,
+    };
+    let _ = bot_state_clone.status_sender.send(status);
+
+    tokio::spawn(async move {
+        connect_bot_sse(&sse_url, token, bot_state_clone).await;
+    });
+
+    Json(ApiResponse {
+        retcode: 0,
+        data: "Config saved successfully".to_string(),
+    })
 }
 
 #[post("/bot/disconnect")]
@@ -547,7 +569,7 @@ pub async fn disconnect_bot(
         .store(false, std::sync::atomic::Ordering::SeqCst);
 
     // 更新配置文件，设置auto_connect为false
-    update_auto_connect_status(false);
+    update_auto_connect_status(false).await;
 
     {
         let mut config = bot_config_state.write().await;
@@ -689,65 +711,76 @@ pub async fn get_login_info(
     })
 }
 
-pub fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionState>) {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionState>) {
+    let config_result = tokio::task::spawn_blocking(|| {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
 
-    let config_file = exe_dir.join("config").join("config.json");
+        let config_file = exe_dir.join("config").join("config.json");
 
-    // 读取配置文件
-    if let Ok(content) = std::fs::read_to_string(&config_file) {
-        if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
-            if config.auto_connect && !config.host.is_empty() {
-                // 设置连接状态
-                bot_state
-                    .should_connect
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                bot_state
-                    .is_connecting
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-
-                // 发送状态更新
-                let status = BotStatusResponse {
-                    connected: false,
-                    connecting: true,
-                };
-                let _ = bot_state.status_sender.send(status);
-
-                // 启动连接
-                let token = config.token.clone();
-                let sse_url = config.get_event_url();
-                let bot_state_clone = bot_state.clone();
-
-                tokio::spawn(async move {
-                    connect_bot_sse(&sse_url, token, bot_state_clone).await;
-                });
+        // 读取配置文件
+        if let Ok(content) = std::fs::read_to_string(&config_file) {
+            if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
+                if config.auto_connect && !config.host.is_empty() {
+                    return Some(config);
+                }
             }
         }
+        None
+    })
+    .await;
+
+    if let Ok(Some(config)) = config_result {
+        // 设置连接状态
+        bot_state
+            .should_connect
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        bot_state
+            .is_connecting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // 发送状态更新
+        let status = BotStatusResponse {
+            connected: false,
+            connecting: true,
+        };
+        let _ = bot_state.status_sender.send(status);
+
+        // 启动连接
+        let token = config.token.clone();
+        let sse_url = config.get_event_url();
+        let bot_state_clone = bot_state.clone();
+
+        tokio::spawn(async move {
+            connect_bot_sse(&sse_url, token, bot_state_clone).await;
+        });
     }
 }
 
-fn update_auto_connect_status(auto_connect: bool) {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+async fn update_auto_connect_status(auto_connect: bool) {
+    let _ = tokio::task::spawn_blocking(move || {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
 
-    let config_file = exe_dir.join("config").join("config.json");
+        let config_file = exe_dir.join("config").join("config.json");
 
-    // 读取现有配置
-    if let Ok(content) = std::fs::read_to_string(&config_file) {
-        if let Ok(mut config) = serde_json::from_str::<BotConfig>(&content) {
-            config.auto_connect = auto_connect;
+        // 读取现有配置
+        if let Ok(content) = std::fs::read_to_string(&config_file) {
+            if let Ok(mut config) = serde_json::from_str::<BotConfig>(&content) {
+                config.auto_connect = auto_connect;
 
-            // 保存更新后的配置
-            if let Ok(json_str) = serde_json::to_string_pretty(&config) {
-                let _ = std::fs::write(&config_file, json_str);
+                // 保存更新后的配置
+                if let Ok(json_str) = serde_json::to_string_pretty(&config) {
+                    let _ = std::fs::write(&config_file, json_str);
+                }
             }
         }
-    }
+    })
+    .await;
 }
 
 async fn connect_bot_sse(
@@ -789,7 +822,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 连接成功后，设置auto_connect为true
-                    update_auto_connect_status(true);
+                    update_auto_connect_status(true).await;
 
                     // 发送连接成功状态
                     let status = BotStatusResponse {
@@ -817,7 +850,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 用户主动断开连接，设置auto_connect为false
-                    update_auto_connect_status(false);
+                    update_auto_connect_status(false).await;
 
                     // 发送断开状态
                     let status = BotStatusResponse {
@@ -853,7 +886,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 用户主动断开连接，设置auto_connect为false
-                    update_auto_connect_status(false);
+                    update_auto_connect_status(false).await;
 
                     // 发送断开状态
                     let status = BotStatusResponse {
@@ -1023,6 +1056,45 @@ pub async fn clear_plugin_output(
                 retcode: 1,
                 data: format!("Failed to clear output: {}", e),
             })
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", content = "data")]
+pub enum PluginUnifiedEvent {
+    Output(crate::plus::manager::PluginOutputEvent),
+    Status(crate::plus::manager::PluginStatusEvent),
+}
+
+#[get("/plugins/events_stream")]
+pub fn plugins_events_stream(manager: &State<Arc<PluginManager>>) -> EventStream![Event + 'static] {
+    let manager = manager.inner().clone();
+    EventStream! {
+        let mut rx_output = manager.subscribe_output();
+        let mut rx_status = manager.subscribe_status();
+
+        loop {
+            let event = tokio::select! {
+                res = rx_output.recv() => match res {
+                    Ok(e) => Some(PluginUnifiedEvent::Output(e)),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(_) => None,
+                },
+                res = rx_status.recv() => match res {
+                    Ok(e) => Some(PluginUnifiedEvent::Status(e)),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(_) => None,
+                },
+            };
+
+            if let Some(event) = event {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    yield Event::data(json);
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         }
     }
 }

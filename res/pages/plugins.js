@@ -5,8 +5,7 @@ const PluginsPage = {
     return {
       plugins: [],
       selectedPlugin: null,
-      eventSources: {},
-      statusEventSource: null,
+      eventsEventSource: null,
       loading: false,
       autoScroll: true,
       pendingStatusUpdates: {},
@@ -117,26 +116,12 @@ const PluginsPage = {
   `,
   mounted() {
     this.loadPlugins();
-    this.connectStatusSSE();
+    this.connectEventsSSE();
   },
   beforeUnmount() {
-    this.stopAllSSE();
-    if (this.statusEventSource) {
-      this.statusEventSource.close();
-      this.statusEventSource = null;
-    }
-  },
-  watch: {
-    selectedPlugin(newVal, oldVal) {
-      // 关闭旧的 SSE
-      if (oldVal && this.eventSources[oldVal]) {
-        this.eventSources[oldVal].close();
-        delete this.eventSources[oldVal];
-      }
-      // 打开新的 SSE
-      if (newVal) {
-        this.connectPluginSSE(newVal);
-      }
+    if (this.eventsEventSource) {
+      this.eventsEventSource.close();
+      this.eventsEventSource = null;
     }
   },
   methods: {
@@ -323,89 +308,63 @@ const PluginsPage = {
         })
         .catch(err => console.error('Failed to clear output:', err));
     },
-    connectPluginSSE(pluginId) {
-      // 关闭旧的连接
-      if (this.eventSources[pluginId]) {
-        this.eventSources[pluginId].close();
+    connectEventsSSE() {
+      if (this.eventsEventSource) {
+        this.eventsEventSource.close();
       }
       
-      const eventSource = new EventSource('/api/plugins/' + encodeURIComponent(pluginId) + '/output/stream');
-      this.eventSources[pluginId] = eventSource;
+      this.eventsEventSource = new EventSource('/api/plugins/events_stream');
       
-      // 清空现有输出，SSE 会发送完整历史
-      const plugin = this.plugins.find(p => p.id === pluginId);
-      if (plugin) {
-        plugin.output = [];
-      }
-      
-      eventSource.onmessage = (event) => {
+      this.eventsEventSource.onmessage = (event) => {
         try {
-          const line = JSON.parse(event.data);
-          const plugin = this.plugins.find(p => p.id === pluginId);
-          if (plugin) {
-            if (!plugin.output) {
-              plugin.output = [];
+          const unifiedEvent = JSON.parse(event.data);
+          const { type, data } = unifiedEvent;
+
+          if (type === 'Status') {
+            const statusEvent = data;
+            const plugin = this.plugins.find(p => p.id === statusEvent.plugin_id);
+            if (plugin) {
+              plugin.status = statusEvent.status;
+              plugin.enabled = statusEvent.enabled;
+              plugin.webui_url = statusEvent.webui_url;
+            } else {
+              this.pendingStatusUpdates[statusEvent.plugin_id] = {
+                  status: statusEvent.status,
+                  enabled: statusEvent.enabled,
+                  webui_url: statusEvent.webui_url
+              };
             }
-            plugin.output.push(line);
-            // 限制输出行数
-            if (plugin.output.length > MAX_OUTPUT_LINES) {
-              plugin.output.shift();
-            }
-            // 自动滚动到底部
-            if (this.autoScroll) {
-              this.$nextTick(() => {
-                const container = document.getElementById('output-' + pluginId);
-                if (container) {
-                  container.scrollTop = container.scrollHeight;
-                }
-              });
+          } else if (type === 'Output') {
+            const outputEvent = data;
+            const plugin = this.plugins.find(p => p.id === outputEvent.plugin_id);
+            if (plugin) {
+              if (!plugin.output) {
+                plugin.output = [];
+              }
+              plugin.output.push(outputEvent.line);
+              
+              if (plugin.output.length > MAX_OUTPUT_LINES) {
+                plugin.output.shift();
+              }
+
+              // 如果是当前选中的插件，且开启了自动滚动
+              if (this.selectedPlugin === outputEvent.plugin_id && this.autoScroll) {
+                this.$nextTick(() => {
+                  const container = document.getElementById('output-' + outputEvent.plugin_id);
+                  if (container) {
+                    container.scrollTop = container.scrollHeight;
+                  }
+                });
+              }
             }
           }
         } catch (err) {
-          console.error('Failed to parse plugin output:', err);
+          console.error('Failed to parse plugin event:', err);
         }
       };
       
-      eventSource.onerror = () => {
-        console.log('Plugin ' + pluginId + ' SSE disconnected');
-      };
-    },
-    stopAllSSE() {
-      Object.values(this.eventSources).forEach(es => { if (es) es.close(); });
-      this.eventSources = {};
-    },
-    connectStatusSSE() {
-      if (this.statusEventSource) {
-        this.statusEventSource.close();
-      }
-      
-      this.statusEventSource = new EventSource('/api/plugins/status_stream');
-      
-      this.statusEventSource.onmessage = (event) => {
-        try {
-          const statusEvent = JSON.parse(event.data);
-          // plugin_id 是后端发送的插件 ID
-          const plugin = this.plugins.find(p => p.id === statusEvent.plugin_id);
-          if (plugin) {
-            plugin.status = statusEvent.status;
-            plugin.enabled = statusEvent.enabled;
-            plugin.webui_url = statusEvent.webui_url;
-          } else {
-            // 如果插件列表尚未加载或找不到插件，保存到挂起更新中
-            this.pendingStatusUpdates[statusEvent.plugin_id] = {
-                status: statusEvent.status,
-                enabled: statusEvent.enabled,
-                webui_url: statusEvent.webui_url
-            };
-          }
-        } catch (err) {
-          console.error('Failed to parse plugin status:', err);
-        }
-      };
-      
-      this.statusEventSource.onerror = () => {
-        console.log('Plugin status SSE disconnected, reconnecting...');
-        setTimeout(() => this.connectStatusSSE(), 3000);
+      this.eventsEventSource.onerror = () => {
+        console.log('Plugins events SSE disconnected');
       };
     }
   }

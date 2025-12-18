@@ -1,3 +1,4 @@
+use rfd::{MessageButtons, MessageDialog, MessageLevel};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,17 @@ pub enum UserEvent {
     TrayIconEvent(TrayIconEvent),
     MenuEvent(MenuEvent),
     NewWindowRequested(String),
+    StartDrag(WindowId),
+    RestartRequested,
+}
+
+fn show_error_dialog(title: &str, message: &str) {
+    MessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(MessageLevel::Error)
+        .set_buttons(MessageButtons::Ok)
+        .show();
 }
 
 fn create_webview(
@@ -31,6 +43,9 @@ fn create_webview(
 ) -> wry::Result<wry::WebView> {
     let window_id = window.id();
     let proxy_for_title = proxy.clone();
+    let proxy_for_new_window = proxy.clone();
+    let proxy_for_ipc = proxy.clone();
+    let window_id_for_ipc = window_id;
 
     WebViewBuilder::new()
         .with_url(url)
@@ -38,8 +53,14 @@ fn create_webview(
             let _ = proxy_for_title.send_event(UserEvent::TitleChanged(window_id, title));
         })
         .with_new_window_req_handler(move |request_url, _req| {
-            let _ = proxy.send_event(UserEvent::NewWindowRequested(request_url));
+            let _ = proxy_for_new_window.send_event(UserEvent::NewWindowRequested(request_url));
             NewWindowResponse::Deny
+        })
+        .with_ipc_handler(move |request| {
+            let msg = request.body();
+            if msg == "drag_window" {
+                let _ = proxy_for_ipc.send_event(UserEvent::StartDrag(window_id_for_ipc));
+            }
         })
         .build(window)
 }
@@ -50,13 +71,22 @@ fn create_window_with_url(
     proxy: &EventLoopProxy<UserEvent>,
     url: &str,
 ) {
-    let new_window = WindowBuilder::new()
+    let window_res = WindowBuilder::new()
         .with_title("加载中...")
         .with_inner_size(LogicalSize::new(1024.0, 768.0))
         .with_window_icon(load_window_icon())
         .with_visible(false)
-        .build(target)
-        .unwrap();
+        .build(target);
+
+    let new_window = match window_res {
+        Ok(w) => w,
+        Err(e) => {
+            let err_msg = format!("创建窗口失败: {}", e);
+            log_error!("{}", err_msg);
+            show_error_dialog("错误", &err_msg);
+            return;
+        }
+    };
 
     // 居中 + 随机偏移
     if let Some(monitor) = new_window.current_monitor() {
@@ -67,7 +97,7 @@ fn create_window_with_url(
 
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .subsec_nanos() as i32;
         let range = 80;
         let offset_x = (nanos % range) - (range / 2);
@@ -89,7 +119,11 @@ fn create_window_with_url(
         Ok(webview) => {
             webviews.insert(window_id, (new_window, webview));
         }
-        Err(e) => log_error!("创建窗口失败: {}", e),
+        Err(e) => {
+            let err_msg = format!("创建 WebView 失败: {}", e);
+            log_error!("{}", err_msg);
+            show_error_dialog("错误", &err_msg);
+        }
     }
 }
 
@@ -114,13 +148,22 @@ fn show_or_create_main_window(
         }
     }
 
-    let new_window = WindowBuilder::new()
+    let window_res = WindowBuilder::new()
         .with_title("加载中...")
         .with_inner_size(LogicalSize::new(1024.0, 768.0))
         .with_window_icon(load_window_icon())
         .with_visible(false)
-        .build(target)
-        .unwrap();
+        .build(target);
+
+    let new_window = match window_res {
+        Ok(w) => w,
+        Err(e) => {
+            let err_msg = format!("创建主窗口失败: {}", e);
+            log_error!("{}", err_msg);
+            show_error_dialog("错误", &err_msg);
+            return;
+        }
+    };
 
     if let Some(monitor) = new_window.current_monitor() {
         let screen_size = monitor.size();
@@ -130,7 +173,7 @@ fn show_or_create_main_window(
 
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .subsec_nanos() as i32;
         let range = 80;
         let offset_x = (nanos % range) - (range / 2);
@@ -153,7 +196,11 @@ fn show_or_create_main_window(
             *main_window_id = Some(window_id);
             webviews.insert(window_id, (new_window, webview));
         }
-        Err(e) => log_error!("创建窗口失败: {}", e),
+        Err(e) => {
+            let err_msg = format!("创建主 WebView 失败: {}", e);
+            log_error!("{}", err_msg);
+            show_error_dialog("错误", &err_msg);
+        }
     }
 }
 
@@ -186,6 +233,7 @@ fn load_window_icon() -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(data, width, height).ok()
 }
 
+use crate::runtime;
 use crate::server::ServerState;
 use std::sync::Arc;
 
@@ -195,9 +243,17 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
     let base_url = format!("http://127.0.0.1:{}", port);
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+
+    // 设置全局代理
+    {
+        let mut p = server_state.main_proxy.proxy.blocking_write();
+        *p = Some(proxy.clone());
+    }
+
     let mut webviews = HashMap::new();
     let mut main_window_id: Option<WindowId> = None;
     let mut initial_window_created = false;
+    let mut is_restarting = false;
 
     // 托盘菜单
     let show_item = MenuItem::new("显示窗口", true, None);
@@ -261,16 +317,38 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
 
         match event {
             Event::LoopDestroyed => {
-                // 事件循环销毁时执行清理
+                // 事件循环销毁时执行清理，使用全局 Runtime
                 log_info!("正在停止所有插件...");
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
+                runtime::block_on(async {
                     server_state
                         .plugin_manager
                         .stop_all_plugins_and_wait(std::time::Duration::from_secs(8))
                         .await;
+
+                    server_state.plugin_manager.cleanup_tmp_apps().await;
                 });
-                server_state.plugin_manager.cleanup_tmp_apps();
+
+                if is_restarting {
+                    log_info!("正在重启程序...");
+                    if let Ok(exe_path) = std::env::current_exe() {
+                        #[cfg(target_os = "windows")]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            let detached_process = 0x00000008;
+                            let _ = std::process::Command::new(&exe_path)
+                                .arg("--restarted")
+                                .creation_flags(detached_process)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn();
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            let _ = std::process::Command::new(exe_path).spawn();
+                        }
+                    }
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -305,15 +383,7 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                     if menu_event.id == quit_item_id {
                         *control_flow = ControlFlow::Exit;
                     } else if menu_event.id == restart_item_id {
-                        // 重启前先停止所有插件
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async {
-                            server_state.plugin_manager.stop_all_plugins().await;
-                        });
-
-                        if let Ok(exe_path) = std::env::current_exe() {
-                            let _ = std::process::Command::new(exe_path).spawn();
-                        }
+                        is_restarting = true;
                         *control_flow = ControlFlow::Exit;
                     } else if menu_event.id == show_item_id {
                         show_or_create_main_window(
@@ -325,8 +395,17 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                         );
                     }
                 }
+                UserEvent::RestartRequested => {
+                    is_restarting = true;
+                    *control_flow = ControlFlow::Exit;
+                }
                 UserEvent::NewWindowRequested(url) => {
                     create_window_with_url(&mut webviews, event_loop_window_target, &proxy, &url);
+                }
+                UserEvent::StartDrag(window_id) => {
+                    if let Some((window, _)) = webviews.get(&window_id) {
+                        let _ = window.drag_window();
+                    }
                 }
                 _ => {}
             },

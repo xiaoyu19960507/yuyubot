@@ -61,8 +61,36 @@
     .theme-toggle { width: 40px; height: 40px; border-radius: 50%; border: none; background-color: var(--hover-bg); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; margin-top: auto; }
     .theme-toggle:hover { background-color: var(--accent-color); color: white; }
     .theme-toggle svg { width: 20px; height: 20px; }
-    .main-content { flex: 1; padding: 30px 40px; overflow-y: auto; height: 100vh; }
-    .main-content:has(.logs-page) { overflow-y: hidden; }
+    .main-content { flex: 1; height: 100vh; position: relative; overflow: hidden; }
+    .page-transition-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 30px 40px;
+      overflow-y: auto;
+      background-color: var(--bg-primary);
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .main-content:has(.logs-page) .page-transition-container { overflow-y: hidden; }
+    
+    .slide-up-enter-from {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+    .slide-up-leave-to {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    .slide-down-enter-from {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    .slide-down-leave-to {
+      transform: translateY(100%);
+      opacity: 0;
+    }
     .page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
     .page-header svg { width: 28px; height: 28px; color: var(--accent-color); }
     .page-header h1 { font-size: 24px; font-weight: 600; }
@@ -234,7 +262,7 @@
 </head>
 <body>
 <div id="app">
-  <nav class="sidebar">
+  <nav class="sidebar" @mousedown="onSidebarMouseDown">
     <div class="logo">
       <img v-if="userAvatar" :src="userAvatar" alt="User Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
       <img v-else src="favicon.ico" alt="Logo">
@@ -259,11 +287,15 @@
     </button>
   </nav>
   <main class="main-content">
-    <logs-page v-if="currentPage === 'logs'" :logs="logs"></logs-page>
-    <plugins-page v-if="currentPage === 'plugins'"></plugins-page>
-    <system-page v-if="currentPage === 'system'" :system-config="systemConfig"></system-page>
-    <bot-page v-if="currentPage === 'bot'" :bot-config="botConfig"></bot-page>
-    <about-page v-if="currentPage === 'about'"></about-page>
+    <transition :name="transitionName">
+      <div :key="currentPage" class="page-transition-container">
+        <logs-page v-if="currentPage === 'logs'" :logs="logs"></logs-page>
+        <plugins-page v-if="currentPage === 'plugins'"></plugins-page>
+        <system-page v-if="currentPage === 'system'" :system-config="systemConfig"></system-page>
+        <bot-page v-if="currentPage === 'bot'" :bot-config="botConfig"></bot-page>
+        <about-page v-if="currentPage === 'about'"></about-page>
+      </div>
+    </transition>
   </main>
   
   <!-- Toast Container -->
@@ -283,6 +315,7 @@ const app = createApp({
   setup() {
     const isDark = ref(false);
     const currentPage = ref('logs');
+    const transitionName = ref('slide-up');
     const toasts = ref([]);
     let toastId = 0;
     
@@ -297,6 +330,21 @@ const app = createApp({
     
     // Expose showToast globally
     window.showToast = showToast;
+
+    const requestWindowDrag = () => {
+      try {
+        if (window.ipc && typeof window.ipc.postMessage === 'function') {
+          window.ipc.postMessage('drag_window');
+        }
+      } catch (_) {}
+    };
+
+    const onSidebarMouseDown = (event) => {
+      if (!event || event.button !== 0) return;
+      const interactive = event.target && event.target.closest && event.target.closest('a,button,input,label,select,textarea,.nav-item,.theme-toggle');
+      if (interactive) return;
+      requestWindowDrag();
+    };
     
     const userAvatar = ref('');
     const navItems = [
@@ -377,6 +425,22 @@ const app = createApp({
         }, 3000);
       };
     };
+    watch(currentPage, (newVal, oldVal) => {
+      const items = navItems.map(item => item.id);
+      const newIndex = items.indexOf(newVal);
+      const oldIndex = items.indexOf(oldVal);
+      transitionName.value = newIndex > oldIndex ? 'slide-up' : 'slide-down';
+      
+      // 保存页面状态
+      fetch('/api/ui/save_state', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ last_page: newVal })
+      }).catch(e => console.error("Failed to save ui state", e));
+    });
+
     onMounted(async () => {
       if (localStorage.getItem('theme') === 'dark') {
         isDark.value = true;
@@ -410,6 +474,7 @@ const app = createApp({
       isDark,
       userAvatar,
       currentPage,
+      transitionName,
       toasts,
       navItems,
       logs,
@@ -417,7 +482,8 @@ const app = createApp({
       botConfig,
       toggleTheme,
       updateUserAvatar,
-      clearUserAvatar
+      clearUserAvatar,
+      onSidebarMouseDown
     };
   }
 });

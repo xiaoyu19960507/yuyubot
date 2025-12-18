@@ -4,7 +4,13 @@ const SystemPage = {
     return {
       port: '-',
       dataDir: '-',
-      loading: true
+      loading: true,
+      confirmDialog: {
+        show: false,
+        title: '',
+        message: '',
+        onConfirm: null
+      }
     };
   },
   mounted() {
@@ -30,6 +36,34 @@ const SystemPage = {
       fetch('/api/open_data_dir', { method: 'POST' })
         .then(res => res.json())
         .catch(err => console.error('Failed to open directory:', err));
+    },
+    confirmAction() {
+      if (this.confirmDialog.onConfirm) {
+        this.confirmDialog.onConfirm();
+      }
+      this.confirmDialog.show = false;
+    },
+    restartProgram() {
+      this.confirmDialog = {
+        show: true,
+        title: '重启程序',
+        message: '确定要重启程序吗？所有正在运行的插件都将被停止。',
+        onConfirm: () => {
+          fetch('/api/restart_program', { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+              if (data.retcode === 0) {
+                this.loading = true;
+                if (window.showToast) {
+                  window.showToast('程序正在重启，请稍候...', 'info');
+                } else {
+                  alert('程序正在重启，请稍候...');
+                }
+              }
+            })
+            .catch(err => console.error('Failed to restart program:', err));
+        }
+      };
     }
   },
   template: `
@@ -42,12 +76,31 @@ const SystemPage = {
         <div class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>基本设置</div>
         <div class="config-form">
           <div class="form-group"><label>服务端口</label><input type="text" :value="port" readonly></div>
-          <div style="display: flex; gap: 8px; align-items: flex-end;">
+          <div style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 16px;">
             <div class="form-group" style="flex: 1; margin-bottom: 0;">
               <label>数据目录</label>
               <input type="text" :value="dataDir" readonly>
             </div>
             <button @click="openDataDir" class="btn-primary">打开</button>
+          </div>
+          <div class="form-group">
+            <label>程序操作</label>
+            <button @click="restartProgram" class="btn-danger">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; margin-right: 4px;"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              重启程序
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Confirmation Modal -->
+      <div v-if="confirmDialog.show" class="modal-overlay" @click="confirmDialog.show = false">
+        <div class="modal" @click.stop>
+          <div class="modal-header">{{ confirmDialog.title }}</div>
+          <div class="modal-body">{{ confirmDialog.message }}</div>
+          <div class="modal-footer">
+            <button class="btn-text" @click="confirmDialog.show = false">取消</button>
+            <button class="btn-primary" @click="confirmAction">确定</button>
           </div>
         </div>
       </div>

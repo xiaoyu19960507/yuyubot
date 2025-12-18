@@ -1,4 +1,5 @@
 use super::plugin::{Plugin, PluginManifest, PluginStatus};
+use crate::runtime;
 use expectrl::{process::Healthcheck, Session};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -7,10 +8,12 @@ use std::fmt::Write;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::task::spawn_blocking;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PluginConfig {
@@ -20,15 +23,17 @@ pub struct PluginConfig {
 pub struct PluginManager {
     plugins: Arc<RwLock<HashMap<String, Arc<Plugin>>>>,
     exe_dir: PathBuf,
-    server_port: u16,
+    server_port: AtomicU16,
     milky_proxy_host: String,
-    milky_proxy_api_port: u16,
-    milky_proxy_event_port: u16,
+    milky_proxy_api_port: AtomicU16,
+    milky_proxy_event_port: AtomicU16,
     output_sender: broadcast::Sender<PluginOutputEvent>,
     status_sender: broadcast::Sender<PluginStatusEvent>,
+    port_ready: Notify,
+    milky_ready: Notify,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct PluginOutputEvent {
     pub plugin_id: String,
     pub line: String,
@@ -55,17 +60,54 @@ impl PluginManager {
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             exe_dir,
-            server_port,
+            server_port: AtomicU16::new(server_port),
             milky_proxy_host,
-            milky_proxy_api_port,
-            milky_proxy_event_port,
+            milky_proxy_api_port: AtomicU16::new(milky_proxy_api_port),
+            milky_proxy_event_port: AtomicU16::new(milky_proxy_event_port),
             output_sender,
             status_sender,
+            port_ready: Notify::new(),
+            milky_ready: Notify::new(),
         }
+    }
+
+    pub async fn wait_for_port(&self) {
+        if self.server_port.load(Ordering::SeqCst) != 0 {
+            return;
+        }
+        self.port_ready.notified().await;
+    }
+
+    pub async fn wait_for_milky(&self) {
+        if self.milky_proxy_api_port.load(Ordering::SeqCst) != 0
+            && self.milky_proxy_event_port.load(Ordering::SeqCst) != 0
+        {
+            return;
+        }
+        self.milky_ready.notified().await;
     }
 
     pub fn subscribe_output(&self) -> broadcast::Receiver<PluginOutputEvent> {
         self.output_sender.subscribe()
+    }
+
+    pub fn set_server_port(&self, port: u16) {
+        self.server_port.store(port, Ordering::SeqCst);
+        self.port_ready.notify_waiters();
+    }
+
+    pub fn set_milky_proxy_api_port(&self, port: u16) {
+        self.milky_proxy_api_port.store(port, Ordering::SeqCst);
+        if self.milky_proxy_event_port.load(Ordering::SeqCst) != 0 {
+            self.milky_ready.notify_waiters();
+        }
+    }
+
+    pub fn set_milky_proxy_event_port(&self, port: u16) {
+        self.milky_proxy_event_port.store(port, Ordering::SeqCst);
+        if self.milky_proxy_api_port.load(Ordering::SeqCst) != 0 {
+            self.milky_ready.notify_waiters();
+        }
     }
 
     pub fn subscribe_status(&self) -> broadcast::Receiver<PluginStatusEvent> {
@@ -81,30 +123,31 @@ impl PluginManager {
         self.exe_dir.join("app")
     }
 
-    pub fn cleanup_tmp_apps(&self) {
+    pub async fn cleanup_tmp_apps(&self) {
         let tmp_apps_dir = self.exe_dir.join("tmp").join("app");
-        if !tmp_apps_dir.exists() {
+
+        if tokio::fs::metadata(&tmp_apps_dir).await.is_err() {
             return;
         }
 
         let mut last_err = None;
         for _ in 0..40 {
-            if let Ok(entries) = std::fs::read_dir(&tmp_apps_dir) {
-                for entry in entries.flatten() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&tmp_apps_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
                     let path = entry.path();
-                    let _ = std::fs::remove_dir_all(&path);
+                    let _ = tokio::fs::remove_dir_all(&path).await;
                 }
             }
 
-            match std::fs::remove_dir_all(&tmp_apps_dir) {
+            match tokio::fs::remove_dir_all(&tmp_apps_dir).await {
                 Ok(_) => return,
                 Err(e) => last_err = Some(e),
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
 
-        if tmp_apps_dir.exists() {
+        if tokio::fs::metadata(&tmp_apps_dir).await.is_ok() {
             if let Some(e) = last_err {
                 log_warn!("Failed to cleanup tmp/app: {}", e);
             } else {
@@ -124,12 +167,34 @@ impl PluginManager {
         }
 
         let deadline = std::time::Instant::now() + max_wait;
+        // 等待大部分时间用于优雅退出
+        let force_kill_threshold = deadline
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or(std::time::Instant::now());
+
         loop {
             let mut any_alive = false;
+            let now = std::time::Instant::now();
+            let should_force_kill = now >= force_kill_threshold;
+
             for plugin in &plugin_refs {
                 if plugin.is_process_alive() {
                     any_alive = true;
-                    break;
+
+                    if should_force_kill {
+                        #[cfg(windows)]
+                        {
+                            let pid = plugin.get_pid();
+                            if pid > 0 {
+                                log_warn!("Force killing plugin process: {}", pid);
+                                use std::os::windows::process::CommandExt;
+                                let _ = std::process::Command::new("taskkill")
+                                    .args(["/PID", &pid.to_string(), "/F", "/T"])
+                                    .creation_flags(0x08000000)
+                                    .output();
+                            }
+                        }
+                    }
                 }
             }
 
@@ -137,7 +202,7 @@ impl PluginManager {
                 break;
             }
 
-            if std::time::Instant::now() >= deadline {
+            if now >= deadline {
                 break;
             }
 
@@ -149,27 +214,30 @@ impl PluginManager {
         self.exe_dir.join("config").join("plugins.json")
     }
 
-    fn load_config(&self) -> PluginConfig {
+    async fn load_config(&self) -> PluginConfig {
         let config_path = self.get_config_path();
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
             serde_json::from_str(&content).unwrap_or_default()
         } else {
             PluginConfig::default()
         }
     }
 
-    fn save_config(&self, config: &PluginConfig) {
+    async fn save_config(&self, config: &PluginConfig) {
         let config_path = self.get_config_path();
+        let content = match serde_json::to_string_pretty(config) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
         if let Some(parent) = config_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = tokio::fs::create_dir_all(parent).await;
         }
-        if let Ok(content) = serde_json::to_string_pretty(config) {
-            let _ = std::fs::write(&config_path, content);
-        }
+        let _ = tokio::fs::write(&config_path, content).await;
     }
 
     pub async fn get_enabled_plugins(&self) -> Vec<String> {
-        let config = self.load_config();
+        let config = self.load_config().await;
         if config.enabled_plugins.is_empty() {
             return Vec::new();
         }
@@ -179,6 +247,7 @@ impl PluginManager {
         let mut new_config_enabled_plugins = Vec::new();
         let mut config_changed = false;
 
+        let plugins_root = self.get_plugins_root();
         for plugin_id in config.enabled_plugins {
             if plugins.contains_key(&plugin_id) {
                 loaded_enabled_plugins.push(plugin_id.clone());
@@ -186,7 +255,7 @@ impl PluginManager {
                 continue;
             }
 
-            if self.get_plugins_root().join(&plugin_id).is_dir() {
+            if plugins_root.join(&plugin_id).is_dir() {
                 new_config_enabled_plugins.push(plugin_id);
             } else {
                 config_changed = true;
@@ -198,54 +267,68 @@ impl PluginManager {
         if config_changed {
             self.save_config(&PluginConfig {
                 enabled_plugins: new_config_enabled_plugins,
-            });
+            })
+            .await;
         }
 
         loaded_enabled_plugins
     }
 
-    pub fn purge_enabled_plugin_if_absent(&self, plugin_id: &str) -> bool {
+    pub async fn purge_enabled_plugin_if_absent(&self, plugin_id: &str) -> bool {
         if self.get_plugins_root().join(plugin_id).is_dir() {
             return false;
         }
-        self.remove_enabled_plugin(plugin_id);
+        self.remove_enabled_plugin(plugin_id).await;
         true
     }
 
-    fn add_enabled_plugin(&self, name: &str) {
-        let mut config = self.load_config();
+    async fn add_enabled_plugin(&self, name: &str) {
+        let mut config = self.load_config().await;
         if !config.enabled_plugins.contains(&name.to_string()) {
             config.enabled_plugins.push(name.to_string());
-            self.save_config(&config);
+            self.save_config(&config).await;
         }
     }
 
-    fn remove_enabled_plugin(&self, name: &str) {
-        let mut config = self.load_config();
+    async fn remove_enabled_plugin(&self, name: &str) {
+        let mut config = self.load_config().await;
         config.enabled_plugins.retain(|n| n != name);
-        self.save_config(&config);
+        self.save_config(&config).await;
     }
 
     pub async fn load_plugins(&self) -> Result<(), String> {
         let app_dir = self.exe_dir.join("app");
 
-        if !app_dir.exists() {
-            std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
+        // 检查并创建目录
+        if tokio::fs::metadata(&app_dir).await.is_err() {
+            tokio::fs::create_dir_all(&app_dir)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        let mut dir_entries = Vec::new();
+        let mut entries = tokio::fs::read_dir(&app_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                dir_entries.push(path);
+            }
+        }
+
+        if dir_entries.is_empty() {
             return Ok(());
         }
 
         let mut plugins = self.plugins.write().await;
 
-        for entry in std::fs::read_dir(&app_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Ok(plugin) = self.load_plugin_from_dir(&path).await {
-                    let id = plugin.id.clone();
-                    // 只添加新插件，不覆盖已存在的（保留运行状态）
-                    plugins.entry(id).or_insert_with(|| Arc::new(plugin));
-                }
+        for path in dir_entries {
+            if let Ok(plugin) = self.load_plugin_from_dir(&path).await {
+                let id = plugin.id.clone();
+                // 只添加新插件，不覆盖已存在的（保留运行状态）
+                plugins.entry(id).or_insert_with(|| Arc::new(plugin));
             }
         }
 
@@ -261,8 +344,10 @@ impl PluginManager {
             .to_string();
 
         let manifest_path = plugin_dir.join("app.json");
-        let manifest_content =
-            std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+        let manifest_content = tokio::fs::read_to_string(&manifest_path)
+            .await
+            .map_err(|e| e.to_string())?;
+
         let manifest: PluginManifest =
             serde_json::from_str(&manifest_content).map_err(|e| e.to_string())?;
 
@@ -272,6 +357,10 @@ impl PluginManager {
     }
 
     pub async fn start_plugin(&self, plugin_id: &str) -> Result<(), String> {
+        // 等待基础服务端口就绪
+        self.wait_for_port().await;
+        self.wait_for_milky().await;
+
         let plugins = self.plugins.read().await;
         let plugin = plugins
             .get(plugin_id)
@@ -280,9 +369,10 @@ impl PluginManager {
         drop(plugins);
 
         let run_id = plugin.begin_run();
-        let run_tmp_dir = plugin
-            .tmp_dir
-            .join(format!("run-{}-{}", run_id, generate_tmp_run_suffix()));
+        let run_tmp_dir =
+            plugin
+                .tmp_dir
+                .join(format!("run-{}-{}", run_id, generate_tmp_run_suffix()));
 
         // 复制插件到tmp目录
         self.copy_plugin_to_tmp(&plugin, &run_tmp_dir).await?;
@@ -307,8 +397,9 @@ impl PluginManager {
 
         // 准备数据目录
         let data_dir = self.exe_dir.join("data").join(plugin_id);
-        if !data_dir.exists() {
-            std::fs::create_dir_all(&data_dir)
+        if tokio::fs::metadata(&data_dir).await.is_err() {
+            tokio::fs::create_dir_all(&data_dir)
+                .await
                 .map_err(|e| format!("Failed to create data dir: {}", e))?;
         }
         let data_dir_str = data_dir.to_string_lossy().to_string();
@@ -324,10 +415,10 @@ impl PluginManager {
         plugin.set_process_alive(true);
 
         // 保存启用状态到配置
-        self.add_enabled_plugin(plugin_id);
+        self.add_enabled_plugin(plugin_id).await;
 
-        // 在启动线程之前获取 runtime handle 和 senders
-        let rt_handle = tokio::runtime::Handle::current();
+        // 使用全局 Runtime 的 handle，确保生命周期一致
+        let rt_handle = runtime::get_handle();
         let output_sender = self.output_sender.clone();
         let status_sender = self.status_sender.clone();
 
@@ -337,11 +428,11 @@ impl PluginManager {
         let args_clone = args.clone();
         let run_tmp_dir_clone = run_tmp_dir.clone();
         let plugin_id_clone = plugin_id.to_string();
-        let server_port = self.server_port;
+        let server_port = self.server_port.load(Ordering::SeqCst);
         let plugin_api_token_for_env = plugin_api_token.clone();
         let milky_proxy_host = self.milky_proxy_host.clone();
-        let milky_proxy_api_port = self.milky_proxy_api_port;
-        let milky_proxy_event_port = self.milky_proxy_event_port;
+        let milky_proxy_api_port = self.milky_proxy_api_port.load(Ordering::SeqCst);
+        let milky_proxy_event_port = self.milky_proxy_event_port.load(Ordering::SeqCst);
 
         if milky_proxy_api_port == 0 || milky_proxy_event_port == 0 {
             return Err("Milky proxy not available".to_string());
@@ -437,7 +528,8 @@ impl PluginManager {
                                                 let bytes = &buf[..n];
                                                 // 去除 ANSI 转义序列
                                                 let stripped = strip_ansi_escapes::strip(bytes);
-                                                let text = String::from_utf8_lossy(&stripped).to_string();
+                                                let text =
+                                                    String::from_utf8_lossy(&stripped).to_string();
                                                 process_output(
                                                     &rt_handle,
                                                     &plugin_clone,
@@ -458,7 +550,7 @@ impl PluginManager {
                                     let pid_str = pid.to_string();
                                     use std::os::windows::process::CommandExt;
                                     let _ = std::process::Command::new("taskkill")
-                                        .args(["/PID", pid_str.as_str(), "/F"])
+                                        .args(["/PID", pid_str.as_str(), "/F", "/T"])
                                         .creation_flags(0x08000000)
                                         .output();
                                 }
@@ -552,16 +644,17 @@ impl PluginManager {
                         }
                     }
 
-                    // 进程结束
-                    if plugin_clone.is_current_run(run_id) {
-                        plugin_clone.set_process_alive(false);
-                    }
-
                     // 进程结束后清理 tmp 目录
                     if run_tmp_dir.exists() {
                         // 等待一小段时间确保进程完全释放文件锁
                         std::thread::sleep(std::time::Duration::from_millis(200));
                         let _ = std::fs::remove_dir_all(&run_tmp_dir);
+                    }
+
+                    // 只有在清理工作完成后，才将进程标记为死亡
+                    // 这样可以避免 stop_all_plugins_and_wait 提前返回，导致 cleanup_tmp_apps 发生竞争
+                    if plugin_clone.is_current_run(run_id) {
+                        plugin_clone.set_process_alive(false);
                     }
 
                     {
@@ -598,14 +691,28 @@ impl PluginManager {
                     }
                 }
                 Err(e) => {
+                    #[cfg(windows)]
+                    let mut _job_handle = None;
+
                     // 启动失败，保持 enabled = true（用户可能想重试）
-                    if plugin_clone.is_current_run(run_id) {
-                        plugin_clone.set_process_alive(false);
+                    // 移除这里的 set_process_alive(false)，移到后面清理完之后
+
+                    #[cfg(windows)]
+                    {
+                        if let Some(h) = _job_handle.take() {
+                            unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };
+                        }
                     }
 
                     // 清理 tmp 目录
                     if run_tmp_dir.exists() {
                         let _ = std::fs::remove_dir_all(&run_tmp_dir);
+                    }
+
+                    // 启动失败，保持 enabled = true（用户可能想重试）
+                    // 同样要等到清理完成后才标记
+                    if plugin_clone.is_current_run(run_id) {
+                        plugin_clone.set_process_alive(false);
                     }
 
                     let err_msg = format!("[错误] 启动插件失败: {}", e);
@@ -652,31 +759,38 @@ impl PluginManager {
             plugin.set_enabled(false).await;
             plugin.set_api_token(None).await;
             plugin.clear_webui().await;
-            self.remove_enabled_plugin(plugin_id);
+            self.remove_enabled_plugin(plugin_id).await;
         }
 
         Ok(())
     }
 
     async fn copy_plugin_to_tmp(&self, plugin: &Plugin, dest_dir: &Path) -> Result<(), String> {
-        // 创建tmp目录
-        std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+        let src_dir = plugin.plugin_dir.clone();
+        let dest_dir = dest_dir.to_path_buf();
 
-        // 复制所有文件
-        for entry in std::fs::read_dir(&plugin.plugin_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            let file_name = entry.file_name();
-            let dest = dest_dir.join(&file_name);
+        spawn_blocking(move || {
+            // 创建tmp目录
+            std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
-            if path.is_file() {
-                std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
-            } else if path.is_dir() {
-                copy_dir_all(&path, &dest).map_err(|e| e.to_string())?;
+            // 复制所有文件
+            for entry in std::fs::read_dir(&src_dir).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                let file_name = entry.file_name();
+                let dest = dest_dir.join(&file_name);
+
+                if path.is_file() {
+                    std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+                } else if path.is_dir() {
+                    copy_dir_all(&path, &dest).map_err(|e| e.to_string())?;
+                }
             }
-        }
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     pub async fn delete_plugin(&self, plugin_id: &str) -> Result<(), String> {
@@ -690,31 +804,23 @@ impl PluginManager {
             }
 
             // 删除插件目录（保留数据目录）
-            if plugin.plugin_dir.exists() {
-                std::fs::remove_dir_all(&plugin.plugin_dir)
+            let plugin_dir = plugin.plugin_dir.clone();
+            if tokio::fs::metadata(&plugin_dir).await.is_ok() {
+                tokio::fs::remove_dir_all(&plugin_dir)
+                    .await
                     .map_err(|e| format!("Failed to delete plugin directory: {}", e))?;
             }
 
             // 从内存中移除
             plugins.remove(plugin_id);
+            drop(plugins);
 
             // 确保从配置中移除
-            self.remove_enabled_plugin(plugin_id);
+            self.remove_enabled_plugin(plugin_id).await;
 
             Ok(())
         } else {
             Err("Plugin not found".to_string())
-        }
-    }
-
-    pub async fn stop_all_plugins(&self) {
-        let plugins = self.plugins.read().await;
-        let plugin_ids: Vec<String> = plugins.keys().cloned().collect();
-        drop(plugins);
-
-        for id in plugin_ids {
-            // 系统退出时的停止，不算作用户主动停止
-            let _ = self.stop_plugin(&id, false).await;
         }
     }
 

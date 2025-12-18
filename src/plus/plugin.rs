@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -39,6 +39,7 @@ pub struct Plugin {
     pub tmp_dir: PathBuf,
     pub status: Arc<Mutex<PluginStatus>>,
     pub is_alive: Arc<AtomicBool>,
+    pub pid: Arc<AtomicU32>,
     pub run_id: Arc<AtomicU64>,
     pub stop_run_id: Arc<AtomicU64>,
     pub output: Arc<Mutex<Vec<String>>>,
@@ -61,6 +62,7 @@ impl Plugin {
             tmp_dir,
             status: Arc::new(Mutex::new(PluginStatus::Stopped)),
             is_alive: Arc::new(AtomicBool::new(false)),
+            pid: Arc::new(AtomicU32::new(0)),
             run_id: Arc::new(AtomicU64::new(0)),
             stop_run_id: Arc::new(AtomicU64::new(0)),
             output: Arc::new(Mutex::new(Vec::new())),
@@ -104,6 +106,13 @@ impl Plugin {
 
     pub fn set_process_alive(&self, alive: bool) {
         self.is_alive.store(alive, Ordering::Relaxed);
+        if !alive {
+            self.pid.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn get_pid(&self) -> u32 {
+        self.pid.load(Ordering::Relaxed)
     }
 
     pub fn is_process_alive(&self) -> bool {

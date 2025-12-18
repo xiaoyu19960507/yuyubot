@@ -2,6 +2,7 @@ use crate::plus::PluginManager;
 use crate::server::api::BotConfig;
 use futures_util::StreamExt;
 use rocket::data::{Data, ToByteUnit};
+use rocket::fairing::AdHoc;
 use rocket::http::{ContentType, Status};
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::stream::{Event, EventStream};
@@ -77,16 +78,21 @@ pub struct MilkyEventProxy {
     ws_clients: AtomicUsize,
 }
 
-pub fn spawn_milky_proxy_servers(
+use rocket::{Ignite, Rocket};
+use tokio::task::JoinHandle;
+
+pub async fn spawn_milky_proxy_servers(
     api_port: u16,
     event_port: u16,
     bot_config: Arc<RwLock<BotConfig>>,
     plugin_manager: Arc<PluginManager>,
-) {
-    if api_port == 0 || event_port == 0 {
-        return;
-    }
-
+) -> Result<
+    (
+        JoinHandle<Result<Rocket<Ignite>, rocket::Error>>,
+        JoinHandle<Result<Rocket<Ignite>, rocket::Error>>,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let api_proxy = Arc::new(MilkyApiProxy {
         bot_config: bot_config.clone(),
         client: reqwest::Client::new(),
@@ -105,47 +111,58 @@ pub fn spawn_milky_proxy_servers(
 
     tokio::spawn(run_upstream_sse(event_proxy.clone()));
 
-    let plugin_manager_for_api = plugin_manager.clone();
-    tokio::spawn(async move {
-        let address = match "127.0.0.1".parse() {
-            Ok(addr) => addr,
-            Err(_) => return,
-        };
-        let config = Config {
-            address,
-            port: api_port,
-            ..Config::default()
-        };
+    // Prepare API Rocket
+    let address: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+    let api_config = Config {
+        address,
+        port: api_port,
+        log_level: rocket::config::LogLevel::Off,
+        ..Config::default()
+    };
 
-        let _ = rocket::custom(config)
-            .manage(api_proxy)
-            .mount("/", routes![proxy_api])
-            .manage(plugin_manager_for_api)
-            .launch()
-            .await;
-    });
+    let plugin_manager_clone_for_api = plugin_manager.clone();
+    let api_rocket = rocket::custom(api_config)
+        .manage(api_proxy.clone())
+        .mount("/", routes![proxy_api])
+        .manage(plugin_manager.clone())
+        .attach(AdHoc::on_liftoff("Get API Port", move |rocket| {
+            Box::pin(async move {
+                let port = rocket.config().port;
+                log_info!("🚀 Milky API 实际上监听的端口是: {}", port);
+                plugin_manager_clone_for_api.set_milky_proxy_api_port(port);
+            })
+        }))
+        .ignite()
+        .await?;
 
-    tokio::spawn(async move {
-        let address = match "127.0.0.1".parse() {
-            Ok(addr) => addr,
-            Err(_) => return,
-        };
-        let config = Config {
-            address,
-            port: event_port,
-            ..Config::default()
-        };
+    // Prepare Event Rocket
+    let event_config = Config {
+        address,
+        port: event_port,
+        log_level: rocket::config::LogLevel::Off,
+        ..Config::default()
+    };
 
-        let ret = rocket::custom(config)
-            .manage(event_proxy)
-            .mount("/", routes![event_ws, event_stream])
-            .manage(plugin_manager)
-            .launch()
-            .await;
-        if let Err(e) = ret {
-            log_error!("Milky event proxy server failed: {:?}", e);
-        }
-    });
+    let plugin_manager_clone_for_event = plugin_manager.clone();
+    let event_rocket = rocket::custom(event_config)
+        .manage(event_proxy.clone())
+        .mount("/", routes![event_ws, event_stream])
+        .manage(plugin_manager.clone())
+        .attach(AdHoc::on_liftoff("Get Event Port", move |rocket| {
+            Box::pin(async move {
+                let port = rocket.config().port;
+                log_info!("🚀 Milky Event 实际上监听的端口是: {}", port);
+                plugin_manager_clone_for_event.set_milky_proxy_event_port(port);
+            })
+        }))
+        .ignite()
+        .await?;
+
+    // Launch both
+    let api_handle = tokio::spawn(api_rocket.launch());
+    let event_handle = tokio::spawn(event_rocket.launch());
+
+    Ok((api_handle, event_handle))
 }
 
 pub struct ProxyBytesResponse {
