@@ -8,11 +8,11 @@ use tao::{
     event_loop::EventLoopProxy,
     window::{Window, WindowBuilder, WindowId},
 };
-use wry::{NewWindowResponse, WebViewBuilder};
 use tray_icon::{
-    TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState,
-    menu::{Menu, MenuItem, MenuEvent, PredefinedMenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
 };
+use wry::{NewWindowResponse, WebViewBuilder};
 
 #[cfg(not(debug_assertions))]
 use crate::Assets;
@@ -74,7 +74,10 @@ fn create_window_with_url(
         let offset_x = (nanos % range) - (range / 2);
         let offset_y = ((nanos / 100) % range) - (range / 2);
 
-        new_window.set_outer_position(PhysicalPosition::new(center_x + offset_x, center_y + offset_y));
+        new_window.set_outer_position(PhysicalPosition::new(
+            center_x + offset_x,
+            center_y + offset_y,
+        ));
     }
 
     new_window.set_visible(true);
@@ -84,7 +87,9 @@ fn create_window_with_url(
 
     let window_id = new_window.id();
     match create_webview(&new_window, proxy.clone(), url) {
-        Ok(webview) => { webviews.insert(window_id, (new_window, webview)); }
+        Ok(webview) => {
+            webviews.insert(window_id, (new_window, webview));
+        }
         Err(e) => log_error!("创建窗口失败: {}", e),
     }
 }
@@ -98,13 +103,12 @@ fn show_or_create_main_window(
 ) {
     if let Some(id) = *main_window_id {
         if let Some((window, _)) = webviews.get(&id) {
-
             window.set_minimized(false); // 取消最小化
-            window.set_visible(true);  //设置可见
-            window.set_focus();         //设置焦点
+            window.set_visible(true); //设置可见
+            window.set_focus(); //设置焦点
             window.set_always_on_top(true); // 开启置顶
             window.set_always_on_top(false); // 关闭置顶
-            
+
             return;
         } else {
             *main_window_id = None;
@@ -133,7 +137,10 @@ fn show_or_create_main_window(
         let offset_x = (nanos % range) - (range / 2);
         let offset_y = ((nanos / 100) % range) - (range / 2);
 
-        new_window.set_outer_position(PhysicalPosition::new(center_x + offset_x, center_y + offset_y));
+        new_window.set_outer_position(PhysicalPosition::new(
+            center_x + offset_x,
+            center_y + offset_y,
+        ));
     }
 
     new_window.set_visible(true);
@@ -179,8 +186,8 @@ fn load_window_icon() -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(data, width, height).ok()
 }
 
-use std::sync::Arc;
 use crate::server::ServerState;
+use std::sync::Arc;
 
 pub fn run_app(port: u16, server_state: Arc<ServerState>) {
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -201,13 +208,17 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
     let quit_item_id = quit_item.id().clone();
 
     let tray_menu = Menu::new();
-    let _ = tray_menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &restart_item, &quit_item]);
+    let _ = tray_menu.append_items(&[
+        &show_item,
+        &PredefinedMenuItem::separator(),
+        &restart_item,
+        &quit_item,
+    ]);
 
     // 托盘图标
     let _tray_icon = if let Some(icon) = load_tray_icon() {
         let proxy_tray = proxy.clone();
         let proxy_menu = proxy.clone();
-        
 
         TrayIconEvent::set_event_handler(Some(move |event| {
             let _ = proxy_tray.send_event(UserEvent::TrayIconEvent(event));
@@ -224,7 +235,9 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
             .ok();
 
         #[cfg(target_os = "windows")]
-        if let Some(t) = &tray { t.set_show_menu_on_left_click(false); }
+        if let Some(t) = &tray {
+            t.set_show_menu_on_left_click(false);
+        }
 
         tray
     } else {
@@ -236,7 +249,13 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
         *control_flow = ControlFlow::Wait;
 
         if !initial_window_created {
-            show_or_create_main_window(&mut webviews, &mut main_window_id, event_loop_window_target, &proxy, &base_url);
+            show_or_create_main_window(
+                &mut webviews,
+                &mut main_window_id,
+                event_loop_window_target,
+                &proxy,
+                &base_url,
+            );
             initial_window_created = true;
         }
 
@@ -249,9 +268,15 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                     server_state.plugin_manager.stop_all_plugins().await;
                 });
             }
-            Event::WindowEvent { event: WindowEvent::CloseRequested, window_id, .. } => {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } => {
                 webviews.remove(&window_id);
-                if main_window_id == Some(window_id) { main_window_id = None; }
+                if main_window_id == Some(window_id) {
+                    main_window_id = None;
+                }
             }
             Event::UserEvent(user_event) => match user_event {
                 UserEvent::TitleChanged(window_id, title) => {
@@ -259,8 +284,18 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                         window.set_title(&title);
                     }
                 }
-                UserEvent::TrayIconEvent(TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) => {
-                    show_or_create_main_window(&mut webviews, &mut main_window_id, event_loop_window_target, &proxy, &base_url);
+                UserEvent::TrayIconEvent(TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }) => {
+                    show_or_create_main_window(
+                        &mut webviews,
+                        &mut main_window_id,
+                        event_loop_window_target,
+                        &proxy,
+                        &base_url,
+                    );
                 }
                 UserEvent::MenuEvent(menu_event) => {
                     if menu_event.id == quit_item_id {
@@ -271,13 +306,19 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                         rt.block_on(async {
                             server_state.plugin_manager.stop_all_plugins().await;
                         });
-                        
+
                         if let Ok(exe_path) = std::env::current_exe() {
                             let _ = std::process::Command::new(exe_path).spawn();
                         }
                         *control_flow = ControlFlow::Exit;
                     } else if menu_event.id == show_item_id {
-                        show_or_create_main_window(&mut webviews, &mut main_window_id, event_loop_window_target, &proxy, &base_url);
+                        show_or_create_main_window(
+                            &mut webviews,
+                            &mut main_window_id,
+                            event_loop_window_target,
+                            &proxy,
+                            &base_url,
+                        );
                     }
                 }
                 UserEvent::NewWindowRequested(url) => {

@@ -20,7 +20,7 @@ YuyuBot 是一个为 Milky 协议设计的桌面端 Bot 管理框架。通过图
 - 图形化管理插件的启动和停止
 - 插件进程隔离，单个插件崩溃不影响其他插件和主程序
 - 实时查看每个插件的输出日志
-- 支持插件的导入（zip）和导出
+- 支持插件的导入（yuyu.7z）和导出
 - 记住已启用的插件，下次启动自动运行
 
 ### 日志系统
@@ -35,21 +35,22 @@ YuyuBot 是一个为 Milky 协议设计的桌面端 Bot 管理框架。通过图
 - 每个插件拥有独立的数据目录
 - 一键打开数据目录
 
-### 本地转发（计划中）
+### 插件菜单
+
+- 插件可自行开启 Web 服务器作为配置界面
+- 插件通过 API 上报菜单地址后，插件管理界面会显示“菜单”按钮，点击即可打开插件菜单
+
+### 本地转发
 
 - 为 Milky 协议提供本地转发代理
 - 多个插件共享同一连接，减少重复请求
 - 节约网络流量，降低服务端压力
 
-### 插件菜单（计划中）
+### 优雅退出
 
-- 插件可自行开启 Web 服务器作为配置界面
-- 在插件管理界面中直接访问插件菜单
-
-### 优雅退出（计划中）
-
-- 当插件开启了 Web 服务器时，程序退出前会向插件发送退出请求
-- 给予插件清理资源和保存数据的机会
+- 停止插件（或主程序退出）时，会优先向插件进程发送 `Ctrl+C`（相当于 `SIGINT`）
+- 给予插件最多 5 秒做清理与保存数据，期间会继续读取并显示插件的退出前输出
+- 若 5 秒后仍未退出，则强制结束插件进程
 
 ### 插件间通信（计划中）
 
@@ -101,15 +102,25 @@ entry 示例：
 
 ### 环境变量
 
-YuyuBot 启动插件时会自动注入以下环境变量，用于连接 Bot：
+YuyuBot 启动插件时会自动注入以下环境变量：
+
+用于连接 Milky（Bot 侧）：
 
 | 环境变量 | 说明 | 示例值 |
 |----------|------|--------|
-| `YUYU_HOST` | Bot 服务主机地址 | `127.0.0.1` |
-| `YUYU_API_PORT` | HTTP API 端口 | `3010` |
-| `YUYU_EVENT_PORT` | 事件流端口 | `3011` |
-| `YUYU_TOKEN` | 鉴权 Token（如果配置了） | `your-token` |
+| `MILKY_HOST` | Bot 服务主机地址 | `127.0.0.1` |
+| `MILKY_API_PORT` | HTTP API 端口 | `3010` |
+| `MILKY_EVENT_PORT` | 事件流端口 | `3011` |
+| `MILKY_TOKEN` | 鉴权 Token（如果配置了） | `your-token` |
 | `YUYU_DATA_DIR` | 插件专属数据目录的绝对路径 | `C:\...\data\my-plugin` |
+
+用于访问主程序内置插件 API（插件 → 主程序）：
+
+| 环境变量 | 说明 | 示例值 |
+|----------|------|--------|
+| `YUYU_HOST` | 主程序 API 主机（固定） | `localhost` |
+| `YUYU_PORT` | 主程序绑定的随机端口号 | `54321` |
+| `YUYU_TOKEN` | 插件访问主程序 API 的鉴权 Token（每次启动动态生成） | `...` |
 
 ### 日志输出
 
@@ -118,7 +129,7 @@ YuyuBot 启动插件时会自动注入以下环境变量，用于连接 Bot：
 ```python
 # Python 示例
 print("插件已启动")
-print(f"连接到 {os.environ['YUYU_HOST']}:{os.environ['YUYU_API_PORT']}")
+print(f"连接到 {os.environ['MILKY_HOST']}:{os.environ['MILKY_API_PORT']}")
 ```
 
 ### 数据存储
@@ -140,65 +151,73 @@ if os.path.exists(config_path):
 
 ### 连接 Bot
 
-> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
-
 使用注入的环境变量构建 API 地址：
 
 ```python
 import os
 import requests
 
-host = os.environ['YUYU_HOST']
-api_port = os.environ['YUYU_API_PORT']
-token = os.environ.get('YUYU_TOKEN', '')
+host = os.environ['MILKY_HOST']
+api_port = os.environ['MILKY_API_PORT']
+token = os.environ.get('MILKY_TOKEN', '')
 
-# 构建 API URL
-api_url = f"http://{host}:{api_port}/api"
+# API: POST /api/:api
+api_url = f"http://{host}:{api_port}/api/send_group_message"
 
-# 发送请求
-headers = {}
+headers = {'Content-Type': 'application/json'}
 if token:
     headers['Authorization'] = f'Bearer {token}'
 
-response = requests.post(f"{api_url}/send_message", json={
-    "group_id": 123456,
-    "message": "Hello!"
-}, headers=headers)
+payload = {
+    "group_id": 123456789,
+    "message": [
+        {"type": "text", "data": {"text": "Hello, world!"}}
+    ]
+}
+
+response = requests.post(api_url, json=payload, headers=headers, timeout=10)
+print(response.json())
 ```
 
-### 监听事件
+上面示例使用的是 Milky 的连接信息，对应环境变量为 `MILKY_HOST`、`MILKY_API_PORT`、`MILKY_EVENT_PORT`、`MILKY_TOKEN`。
 
-> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
+`YUYU_HOST/YUYU_PORT/YUYU_TOKEN` 是主程序提供给插件调用内置 API（例如插件菜单）的信息，不要与 Milky 连接变量混用。
+
+### 监听事件
 
 连接事件流端口获取实时事件：
 
 ```python
 import os
-import requests
+import json
+import urllib3
+import sseclient
 
-host = os.environ['YUYU_HOST']
-event_port = os.environ['YUYU_EVENT_PORT']
-token = os.environ.get('YUYU_TOKEN', '')
+host = os.environ['MILKY_HOST']
+event_port = os.environ['MILKY_EVENT_PORT']
+token = os.environ.get('MILKY_TOKEN', '')
 
 event_url = f"http://{host}:{event_port}/event"
 
-headers = {'Accept': 'text/event-stream'}
-if token:
-    headers['Authorization'] = f'Bearer {token}'
+headers = (
+    {'Accept': 'text/event-stream', 'Authorization': f'Bearer {token}'}
+    if token
+    else {'Accept': 'text/event-stream'}
+)
 
-# SSE 事件流
-response = requests.get(event_url, headers=headers, stream=True)
-for line in response.iter_lines():
-    if line:
-        line = line.decode('utf-8')
-        if line.startswith('data: '):
-            data = line[6:]
-            print(f"收到事件: {data}")
+response = urllib3.PoolManager().request(
+    'GET',
+    event_url,
+    preload_content=False,
+    headers=headers,
+)
+
+client = sseclient.SSEClient(response)
+for event in client.events():
+    print(json.loads(event.data))
 ```
 
 ### 完整示例
-
-> 注意，此示例代码由AI编写，而AI并不了解Milky，请谨慎查看
 
 一个简单的复读机插件：
 
@@ -207,12 +226,14 @@ for line in response.iter_lines():
 import os
 import json
 import requests
+import urllib3
+import sseclient
 
 # 从环境变量获取配置
-HOST = os.environ['YUYU_HOST']
-API_PORT = os.environ['YUYU_API_PORT']
-EVENT_PORT = os.environ['YUYU_EVENT_PORT']
-TOKEN = os.environ.get('YUYU_TOKEN', '')
+HOST = os.environ['MILKY_HOST']
+API_PORT = os.environ['MILKY_API_PORT']
+EVENT_PORT = os.environ['MILKY_EVENT_PORT']
+TOKEN = os.environ.get('MILKY_TOKEN', '')
 
 API_URL = f"http://{HOST}:{API_PORT}/api"
 EVENT_URL = f"http://{HOST}:{EVENT_PORT}/event"
@@ -223,47 +244,85 @@ def get_headers():
         headers['Authorization'] = f'Bearer {TOKEN}'
     return headers
 
-def send_group_message(group_id, message):
-    requests.post(f"{API_URL}/send_group_msg", json={
+def get_plain_text(segments):
+    parts = []
+    for seg in segments:
+        if seg.get('type') == 'text':
+            parts.append(seg.get('data', {}).get('text', ''))
+    return ''.join(parts)
+
+def send_group_message(group_id, text):
+    payload = {
         "group_id": group_id,
-        "message": message
-    }, headers=get_headers())
+        "message": [
+            {"type": "text", "data": {"text": text}}
+        ]
+    }
+    requests.post(
+        f"{API_URL}/send_group_message",
+        json=payload,
+        headers=get_headers(),
+        timeout=10,
+    )
 
 def main():
     print("复读机插件已启动")
-    
-    headers = get_headers()
-    headers['Accept'] = 'text/event-stream'
-    
-    response = requests.get(EVENT_URL, headers=headers, stream=True)
-    
-    for line in response.iter_lines():
-        if not line:
-            continue
-        
-        line = line.decode('utf-8')
-        if not line.startswith('data: '):
-            continue
-        
+
+    headers = (
+        {'Accept': 'text/event-stream', 'Authorization': f'Bearer {TOKEN}'}
+        if TOKEN
+        else {'Accept': 'text/event-stream'}
+    )
+    response = urllib3.PoolManager().request(
+        'GET',
+        EVENT_URL,
+        preload_content=False,
+        headers=headers,
+    )
+
+    client = sseclient.SSEClient(response)
+    for event in client.events():
         try:
-            event = json.loads(line[6:])
-            
-            # 处理群消息
-            if event.get('post_type') == 'message' and event.get('message_type') == 'group':
-                group_id = event['group_id']
-                message = event['raw_message']
-                
-                # 复读
-                if message.startswith('/echo '):
-                    content = message[6:]
-                    send_group_message(group_id, content)
-                    print(f"复读: {content}")
-        
+            evt = json.loads(event.data)
         except json.JSONDecodeError:
-            pass
+            continue
+
+        if evt.get('event_type') != 'message_receive':
+            continue
+
+        msg = evt.get('data', {})
+        if msg.get('message_scene') != 'group':
+            continue
+
+        group_id = msg.get('peer_id')
+        text = get_plain_text(msg.get('segments', []))
+
+        if not text.startswith('/echo '):
+            continue
+
+        content = text[len('/echo '):]
+        send_group_message(group_id, content)
+        print(f"复读: {content}")
 
 if __name__ == '__main__':
     main()
+```
+
+### 插件菜单 API
+
+插件可以启动自己的 Web 服务作为配置界面，然后向主程序上报菜单入口。主程序收到上报后，会在插件管理页显示“菜单”按钮。
+
+接口：
+
+- `POST http://{YUYU_HOST}:{YUYU_PORT}/set_webui_port`
+- Header：`Authorization: Bearer {YUYU_TOKEN}`
+- Body（JSON）：
+
+```json
+{
+  "webui": "/",
+  "port": 12345
+}
 ```
 
 ---

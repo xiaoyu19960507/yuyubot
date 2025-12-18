@@ -1,17 +1,19 @@
 pub mod api;
+pub mod milky_proxy;
 
-use rocket::{get, routes, Config};
+use crate::plus::PluginManager;
 #[cfg(debug_assertions)]
 use rocket::fs::NamedFile;
 #[cfg(not(debug_assertions))]
 use rocket::http::ContentType;
+use rocket::{get, routes, Config};
 use std::net::TcpListener;
 use std::path::Path;
-use std::thread;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::thread;
 use tokio::sync::broadcast;
-use crate::plus::PluginManager;
+use tokio::sync::RwLock;
 
 #[cfg(not(debug_assertions))]
 use crate::Assets;
@@ -64,28 +66,65 @@ pub struct ServerState {
     pub plugin_manager: Arc<PluginManager>,
 }
 
+fn get_free_local_port() -> Option<u16> {
+    TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|listener| listener.local_addr().ok().map(|addr| addr.port()))
+}
+
 pub fn start_server() -> (u16, Arc<ServerState>) {
     let port = match TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => match listener.local_addr() {
             Ok(addr) => addr.port(),
             Err(_) => {
                 log_error!("Failed to get local address");
-                return (0, Arc::new(ServerState { plugin_manager: Arc::new(PluginManager::new(std::path::PathBuf::from("."))) }));
+                return (
+                    0,
+                    Arc::new(ServerState {
+                        plugin_manager: Arc::new(PluginManager::new(
+                            std::path::PathBuf::from("."),
+                            0,
+                            "127.0.0.1".to_string(),
+                            0,
+                            0,
+                        )),
+                    }),
+                );
             }
         },
         Err(_) => {
             log_error!("Failed to bind to random port");
-            return (0, Arc::new(ServerState { plugin_manager: Arc::new(PluginManager::new(std::path::PathBuf::from("."))) }));
+            return (
+                0,
+                Arc::new(ServerState {
+                    plugin_manager: Arc::new(PluginManager::new(
+                        std::path::PathBuf::from("."),
+                        0,
+                        "127.0.0.1".to_string(),
+                        0,
+                        0,
+                    )),
+                }),
+            );
         }
     };
-    
+
+    let milky_proxy_api_port = get_free_local_port().unwrap_or(0);
+    let milky_proxy_event_port = get_free_local_port().unwrap_or(0);
+
     // 预先创建插件管理器，以便返回给 main 函数使用
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let plugin_manager = Arc::new(PluginManager::new(exe_dir.clone()));
-    
+    let plugin_manager = Arc::new(PluginManager::new(
+        exe_dir.clone(),
+        port,
+        "127.0.0.1".to_string(),
+        milky_proxy_api_port,
+        milky_proxy_event_port,
+    ));
+
     let server_state = Arc::new(ServerState {
         plugin_manager: plugin_manager.clone(),
     });
@@ -98,14 +137,11 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                     Ok(addr) => addr,
                     Err(_) => return,
                 };
-                
+
                 let data_dir = exe_dir.join("data").to_string_lossy().to_string();
-                
-                let system_info = Arc::new(api::SystemInfo {
-                    port,
-                    data_dir,
-                });
-                
+
+                let system_info = Arc::new(api::SystemInfo { port, data_dir });
+
                 let (status_sender, _) = broadcast::channel(100);
                 let bot_state = Arc::new(BotConnectionState {
                     is_connected: AtomicBool::new(false),
@@ -113,27 +149,45 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                     should_connect: AtomicBool::new(false),
                     status_sender,
                 });
-                
+
+                let bot_config_state =
+                    Arc::new(RwLock::new(api::load_bot_config_from_disk(&exe_dir)));
+
                 // 加载插件
                 if let Err(e) = plugin_manager.load_plugins().await {
                     log_error!("Failed to load plugins: {}", e);
                 }
-                
+
                 // 自动启动之前启用的插件
                 let plugin_manager_for_auto_start = plugin_manager.clone();
                 tokio::spawn(async move {
                     // 等待一小段时间确保服务器完全启动
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    let enabled_plugins = plugin_manager_for_auto_start.get_enabled_plugins();
+                    let enabled_plugins = plugin_manager_for_auto_start.get_enabled_plugins().await;
                     for plugin_id in enabled_plugins {
-                        let name = plugin_manager_for_auto_start.get_plugin_name(&plugin_id).await.unwrap_or_else(|| plugin_id.clone());
+                        let name = plugin_manager_for_auto_start
+                            .get_plugin_name(&plugin_id)
+                            .await
+                            .unwrap_or_else(|| plugin_id.clone());
                         log_info!("Auto-starting plugin: {}({})", name, plugin_id);
-                        if let Err(e) = plugin_manager_for_auto_start.start_plugin(&plugin_id).await {
-                            log_error!("Failed to auto-start plugin {}({}): {}", name, plugin_id, e);
+                        if let Err(e) = plugin_manager_for_auto_start.start_plugin(&plugin_id).await
+                        {
+                            if e == "Plugin not found"
+                                && plugin_manager_for_auto_start
+                                    .purge_enabled_plugin_if_absent(&plugin_id)
+                            {
+                                continue;
+                            }
+                            log_error!(
+                                "Failed to auto-start plugin {}({}): {}",
+                                name,
+                                plugin_id,
+                                e
+                            );
                         }
                     }
                 });
-                
+
                 // 检查并执行自动连接
                 let bot_state_for_auto_connect = bot_state.clone();
                 tokio::spawn(async move {
@@ -141,7 +195,14 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     api::check_and_auto_connect(bot_state_for_auto_connect);
                 });
-                
+
+                milky_proxy::spawn_milky_proxy_servers(
+                    milky_proxy_api_port,
+                    milky_proxy_event_port,
+                    bot_config_state.clone(),
+                    plugin_manager.clone(),
+                );
+
                 let config = Config {
                     address,
                     port,
@@ -150,35 +211,39 @@ pub fn start_server() -> (u16, Arc<ServerState>) {
                 let _rocket = rocket::custom(config)
                     .manage(system_info)
                     .manage(bot_state)
+                    .manage(bot_config_state)
                     .manage(plugin_manager)
-                    .mount("/", routes![index, assets])
-                    .mount("/api", routes![
-                        api::get_app_nums, 
-                        api::get_logs, 
-                        api::clear_logs, 
-                        api::logs_stream, 
-                        api::get_system_info, 
-                        api::open_data_dir, 
-                        api::get_app_info, 
-                        api::get_bot_config, 
-                        api::save_bot_config, 
-                        api::disconnect_bot, 
-                        api::get_bot_status, 
-                        api::bot_status_stream, 
-                        api::get_login_info,
-                        api::list_plugins,
-                        api::start_plugin,
-                        api::stop_plugin,
-                        api::uninstall_plugin,
-                        api::export_plugin,
-                        api::import_plugin,
-                        api::get_plugin_output,
-                        api::clear_plugin_output,
-                        api::plugin_output_stream,
-                        api::plugins_status_stream,
-                        api::get_ui_state,
-                        api::save_ui_state
-                    ])
+                    .mount("/", routes![index, assets, api::set_webui_port])
+                    .mount(
+                        "/api",
+                        routes![
+                            api::get_app_nums,
+                            api::get_logs,
+                            api::clear_logs,
+                            api::logs_stream,
+                            api::get_system_info,
+                            api::open_data_dir,
+                            api::get_app_info,
+                            api::get_bot_config,
+                            api::save_bot_config,
+                            api::disconnect_bot,
+                            api::get_bot_status,
+                            api::bot_status_stream,
+                            api::get_login_info,
+                            api::list_plugins,
+                            api::start_plugin,
+                            api::stop_plugin,
+                            api::uninstall_plugin,
+                            api::export_plugin,
+                            api::import_plugin,
+                            api::get_plugin_output,
+                            api::clear_plugin_output,
+                            api::plugin_output_stream,
+                            api::plugins_status_stream,
+                            api::get_ui_state,
+                            api::save_ui_state
+                        ],
+                    )
                     .launch()
                     .await;
             });

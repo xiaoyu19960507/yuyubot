@@ -60,6 +60,10 @@ const PluginsPage = {
               </div>
             </div>
             <div class="plugin-actions">
+              <button v-if="plugin.webui_url" class="btn-primary" @click.stop="openPluginMenu(plugin.webui_url)" :disabled="loading" style="margin-right: 5px;" title="插件菜单">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                菜单
+              </button>
               <button class="btn-primary" @click.stop="exportPlugin(plugin.id)" :disabled="loading" style="margin-right: 5px;" title="导出插件">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                 导出
@@ -140,6 +144,10 @@ const PluginsPage = {
       const map = { 'running': '运行中', 'stopped': '已停止', 'error': '出错' };
       return map[status] || status;
     },
+    openPluginMenu(url) {
+      if (!url) return;
+      window.open(url, '_blank');
+    },
     togglePlugin(id) {
       if (this.selectedPlugin === id) {
         this.selectedPlugin = null;
@@ -176,32 +184,29 @@ const PluginsPage = {
         .finally(() => { this.loading = false; });
     },
     exportPlugin(id) {
-      this.confirmDialog = {
-        show: true,
-        title: '导出插件',
-        message: '确定要导出插件 ' + id + ' 吗？',
-        onConfirm: () => {
-          this.loading = true;
-          fetch('/api/plugins/export', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ plugin_id: id })
-          })
-          .then(res => res.json())
-          .then(data => {
-            if (data.retcode === 0) {
-              window.showToast('导出成功！', 'success');
-            } else {
-              window.showToast('导出失败: ' + data.data, 'error');
+      this.loading = true;
+      fetch('/api/plugins/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin_id: id })
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.retcode === 0) {
+            if (data.data === 'Export cancelled') {
+              window.showToast('导出已取消', 'info');
+              return;
             }
-          })
-          .catch(err => {
-            console.error('Failed to export plugin:', err);
-            window.showToast('导出失败: ' + err, 'error');
-          })
-          .finally(() => { this.loading = false; });
-        }
-      };
+            window.showToast('导出成功！', 'success');
+          } else {
+            window.showToast('导出失败: ' + data.data, 'error');
+          }
+        })
+        .catch(err => {
+          console.error('Failed to export plugin:', err);
+          window.showToast('导出失败: ' + err, 'error');
+        })
+        .finally(() => { this.loading = false; });
     },
     uninstallPlugin(id) {
       const plugin = this.plugins.find(p => p.id === id);
@@ -257,6 +262,7 @@ const PluginsPage = {
                   const update = this.pendingStatusUpdates[p.id];
                   p.status = update.status;
                   p.enabled = update.enabled;
+                  p.webui_url = update.webui_url;
               }
               
               return { ...p, output };
@@ -275,8 +281,6 @@ const PluginsPage = {
         .then(data => {
           console.log('Start plugin response:', data);
           if (data.retcode === 0) {
-            // 展开插件输出
-            this.selectedPlugin = id;
             setTimeout(() => this.loadPlugins(), 500);
           } else {
             alert('启动失败: ' + data.data);
@@ -385,11 +389,13 @@ const PluginsPage = {
           if (plugin) {
             plugin.status = statusEvent.status;
             plugin.enabled = statusEvent.enabled;
+            plugin.webui_url = statusEvent.webui_url;
           } else {
             // 如果插件列表尚未加载或找不到插件，保存到挂起更新中
             this.pendingStatusUpdates[statusEvent.plugin_id] = {
                 status: statusEvent.status,
-                enabled: statusEvent.enabled
+                enabled: statusEvent.enabled,
+                webui_url: statusEvent.webui_url
             };
           }
         } catch (err) {

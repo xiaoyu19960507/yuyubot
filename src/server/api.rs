@@ -1,13 +1,20 @@
-use rocket::{get, post, serde::json::Json, State, response::stream::{EventStream, Event}};
-use serde::{Serialize, Deserialize};
 use crate::logger;
 use crate::plus::PluginManager;
-use std::sync::Arc;
-use std::path::PathBuf;
-use std::time::Duration;
-use zip;
-use walkdir;
 use rfd;
+use rocket::{
+    get,
+    http::Status,
+    post,
+    request::{FromRequest, Outcome},
+    response::stream::{Event, EventStream},
+    serde::json::Json,
+    Request, State,
+};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
@@ -37,15 +44,72 @@ pub struct UiState {
     pub last_page: String,
 }
 
+pub struct PluginCaller {
+    pub plugin_id: String,
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for PluginCaller {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let auth = match req.headers().get_one("Authorization") {
+            Some(v) => v,
+            None => return Outcome::Error((Status::Unauthorized, ())),
+        };
+        let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
+        if token.is_empty() {
+            return Outcome::Error((Status::Unauthorized, ()));
+        }
+
+        let manager = match req.rocket().state::<Arc<PluginManager>>() {
+            Some(m) => m,
+            None => return Outcome::Error((Status::InternalServerError, ())),
+        };
+
+        match manager.get_plugin_id_by_api_token(token).await {
+            Some(plugin_id) => Outcome::Success(PluginCaller { plugin_id }),
+            None => Outcome::Error((Status::Unauthorized, ())),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetWebuiPortRequest {
+    pub webui: String,
+    pub port: u16,
+}
+
+#[post("/set_webui_port", format = "json", data = "<req_body>")]
+pub async fn set_webui_port(
+    caller: PluginCaller,
+    req_body: Json<SetWebuiPortRequest>,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    match manager
+        .set_plugin_webui(&caller.plugin_id, req_body.webui.clone(), req_body.port)
+        .await
+    {
+        Ok(_) => Json(ApiResponse {
+            retcode: 0,
+            data: "ok".to_string(),
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
+    }
+}
+
 #[get("/ui/state")]
 pub fn get_ui_state() -> Json<ApiResponse<UiState>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_file = exe_dir.join("config").join("ui.json");
-    
+
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(state) = serde_json::from_str::<UiState>(&content) {
             return Json(ApiResponse {
@@ -54,10 +118,12 @@ pub fn get_ui_state() -> Json<ApiResponse<UiState>> {
             });
         }
     }
-    
+
     Json(ApiResponse {
         retcode: 0,
-        data: UiState { last_page: "logs".to_string() },
+        data: UiState {
+            last_page: "logs".to_string(),
+        },
     })
 }
 
@@ -67,17 +133,17 @@ pub fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("ui.json");
-    
+
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
         return Json(ApiResponse {
             retcode: 1,
             data: format!("Failed to create config directory: {}", e),
         });
     }
-    
+
     if let Ok(json_str) = serde_json::to_string_pretty(&state.into_inner()) {
         if let Err(e) = std::fs::write(&config_file, json_str) {
             return Json(ApiResponse {
@@ -86,7 +152,7 @@ pub fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
             });
         }
     }
-    
+
     Json(ApiResponse {
         retcode: 0,
         data: "UI state saved".to_string(),
@@ -115,7 +181,7 @@ impl BotConfig {
     pub fn get_api_url(&self) -> String {
         format!("http://{}:{}/api", self.host, self.api_port)
     }
-    
+
     pub fn get_event_url(&self) -> String {
         format!("http://{}:{}/event", self.host, self.event_port)
     }
@@ -123,7 +189,10 @@ impl BotConfig {
 
 #[get("/get_app_nums")]
 pub fn get_app_nums() -> Json<ApiResponse<i32>> {
-    Json(ApiResponse { retcode: 0, data: 8 })
+    Json(ApiResponse {
+        retcode: 0,
+        data: 8,
+    })
 }
 
 #[get("/logs")]
@@ -148,7 +217,7 @@ pub fn clear_logs() -> Json<ApiResponse<String>> {
 pub fn logs_stream() -> EventStream![Event + 'static] {
     EventStream! {
         let mut rx = logger::subscribe_logs();
-        
+
         while let Ok(log_entry) = rx.recv().await {
             if let Ok(json) = serde_json::to_string(&log_entry) {
                 yield Event::data(json);
@@ -172,14 +241,12 @@ pub fn get_system_info(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse
 #[post("/open_data_dir")]
 pub fn open_data_dir(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse<String>> {
     let path = &system_info.data_dir;
-    
+
     // 创建目录（如果不存在）
     let _ = std::fs::create_dir_all(path);
-    
+
     // 打开目录
-    let _ = std::process::Command::new("explorer")
-        .arg(path)
-        .spawn();
+    let _ = std::process::Command::new("explorer").arg(path).spawn();
 
     Json(ApiResponse {
         retcode: 0,
@@ -212,15 +279,78 @@ struct LegacyBotConfig {
     pub auto_connect: bool,
 }
 
+pub fn load_bot_config_from_disk(exe_dir: &std::path::Path) -> BotConfig {
+    let config_file = exe_dir.join("config").join("config.json");
+
+    let Ok(content) = std::fs::read_to_string(&config_file) else {
+        return BotConfig {
+            host: "localhost".to_string(),
+            api_port: 3010,
+            event_port: 3011,
+            token: None,
+            auto_connect: false,
+        };
+    };
+
+    if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
+        return config;
+    }
+
+    if let Ok(legacy_config) = serde_json::from_str::<LegacyBotConfig>(&content) {
+        if let (Some(host), Some(api_port), Some(event_port)) = (
+            legacy_config.host,
+            legacy_config.api_port,
+            legacy_config.event_port,
+        ) {
+            return BotConfig {
+                host,
+                api_port,
+                event_port,
+                token: legacy_config.token,
+                auto_connect: legacy_config.auto_connect,
+            };
+        }
+
+        if let (Some(api), Some(event_sse)) = (legacy_config.api, legacy_config.event_sse) {
+            let (host, api_port) = parse_url(&api).unwrap_or(("localhost".to_string(), 3010));
+            let (_, event_port) = parse_url(&event_sse).unwrap_or(("localhost".to_string(), 3011));
+
+            return BotConfig {
+                host,
+                api_port,
+                event_port,
+                token: legacy_config.token,
+                auto_connect: legacy_config.auto_connect,
+            };
+        }
+
+        return BotConfig {
+            host: "localhost".to_string(),
+            api_port: 3010,
+            event_port: 3011,
+            token: legacy_config.token,
+            auto_connect: false,
+        };
+    }
+
+    BotConfig {
+        host: "localhost".to_string(),
+        api_port: 3010,
+        event_port: 3011,
+        token: None,
+        auto_connect: false,
+    }
+}
+
 #[get("/bot/get_config")]
 pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_file = exe_dir.join("config").join("config.json");
-    
+
     match std::fs::read_to_string(&config_file) {
         Ok(content) => {
             // 尝试解析新格式
@@ -230,12 +360,15 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
                     data: config,
                 });
             }
-            
+
             // 尝试解析旧格式并转换
             match serde_json::from_str::<LegacyBotConfig>(&content) {
                 Ok(legacy_config) => {
-                    let config = if let (Some(host), Some(api_port), Some(event_port)) = 
-                        (legacy_config.host, legacy_config.api_port, legacy_config.event_port) {
+                    let config = if let (Some(host), Some(api_port), Some(event_port)) = (
+                        legacy_config.host,
+                        legacy_config.api_port,
+                        legacy_config.event_port,
+                    ) {
                         // 新格式
                         BotConfig {
                             host,
@@ -244,11 +377,15 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
                             token: legacy_config.token,
                             auto_connect: legacy_config.auto_connect,
                         }
-                    } else if let (Some(api), Some(event_sse)) = (legacy_config.api, legacy_config.event_sse) {
+                    } else if let (Some(api), Some(event_sse)) =
+                        (legacy_config.api, legacy_config.event_sse)
+                    {
                         // 旧格式，尝试解析URL
-                        let (host, api_port) = parse_url(&api).unwrap_or(("localhost".to_string(), 3010));
-                        let (_, event_port) = parse_url(&event_sse).unwrap_or(("localhost".to_string(), 3011));
-                        
+                        let (host, api_port) =
+                            parse_url(&api).unwrap_or(("localhost".to_string(), 3010));
+                        let (_, event_port) =
+                            parse_url(&event_sse).unwrap_or(("localhost".to_string(), 3011));
+
                         BotConfig {
                             host,
                             api_port,
@@ -266,7 +403,7 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
                             auto_connect: false,
                         }
                     };
-                    
+
                     Json(ApiResponse {
                         retcode: 0,
                         data: config,
@@ -297,7 +434,7 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
                     event_port: 3011,
                     token: None,
                     auto_connect: false,
-                    },
+                },
             })
         }
     }
@@ -306,25 +443,30 @@ pub fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
 fn parse_url(url: &str) -> Option<(String, u16)> {
     if let Ok(parsed) = url::Url::parse(url) {
         let host = parsed.host_str()?.to_string();
-        let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+        let port = parsed
+            .port()
+            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
         Some((host, port))
     } else {
         None
     }
 }
 
-
-
 #[post("/bot/save_config", format = "json", data = "<config>")]
-pub fn save_bot_config(config: Json<BotConfig>, _system_info: &State<Arc<SystemInfo>>, bot_state: &State<Arc<crate::server::BotConnectionState>>) -> Json<ApiResponse<String>> {
+pub async fn save_bot_config(
+    config: Json<BotConfig>,
+    _system_info: &State<Arc<SystemInfo>>,
+    bot_state: &State<Arc<crate::server::BotConnectionState>>,
+    bot_config_state: &State<Arc<RwLock<BotConfig>>>,
+) -> Json<ApiResponse<String>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("config.json");
-    
+
     // 创建config目录
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
         log_error!("Failed to create config directory: {}", e);
@@ -333,33 +475,38 @@ pub fn save_bot_config(config: Json<BotConfig>, _system_info: &State<Arc<SystemI
             data: format!("Failed to create config directory: {}", e),
         });
     }
-    
+
     // 保存配置到JSON文件，不修改auto_connect状态
     let config_inner = config.into_inner();
     match serde_json::to_string_pretty(&config_inner) {
         Ok(json_str) => {
             match std::fs::write(&config_file, json_str) {
                 Ok(_) => {
-                    
+                    *bot_config_state.write().await = config_inner.clone();
+
                     // 尝试连接SSE
                     let token = config_inner.token.clone();
                     let sse_url = config_inner.get_event_url();
                     let bot_state_clone = bot_state.inner().clone();
-                    
-                    bot_state_clone.should_connect.store(true, std::sync::atomic::Ordering::SeqCst);
-                    bot_state_clone.is_connecting.store(true, std::sync::atomic::Ordering::SeqCst);
-                    
+
+                    bot_state_clone
+                        .should_connect
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    bot_state_clone
+                        .is_connecting
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+
                     // 发送状态更新
-                    let status = BotStatusResponse { 
-                        connected: false, 
-                        connecting: true 
+                    let status = BotStatusResponse {
+                        connected: false,
+                        connecting: true,
                     };
                     let _ = bot_state_clone.status_sender.send(status);
-                    
+
                     tokio::spawn(async move {
                         connect_bot_sse(&sse_url, token, bot_state_clone).await;
                     });
-                    
+
                     Json(ApiResponse {
                         retcode: 0,
                         data: "Config saved successfully".to_string(),
@@ -385,21 +532,35 @@ pub fn save_bot_config(config: Json<BotConfig>, _system_info: &State<Arc<SystemI
 }
 
 #[post("/bot/disconnect")]
-pub fn disconnect_bot(bot_state: &State<Arc<crate::server::BotConnectionState>>) -> Json<ApiResponse<String>> {
-    bot_state.is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
-    bot_state.is_connecting.store(false, std::sync::atomic::Ordering::SeqCst);
-    bot_state.should_connect.store(false, std::sync::atomic::Ordering::SeqCst);
-    
+pub async fn disconnect_bot(
+    bot_state: &State<Arc<crate::server::BotConnectionState>>,
+    bot_config_state: &State<Arc<RwLock<BotConfig>>>,
+) -> Json<ApiResponse<String>> {
+    bot_state
+        .is_connected
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    bot_state
+        .is_connecting
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    bot_state
+        .should_connect
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
     // 更新配置文件，设置auto_connect为false
     update_auto_connect_status(false);
-    
+
+    {
+        let mut config = bot_config_state.write().await;
+        config.auto_connect = false;
+    }
+
     // 发送状态更新
-    let status = BotStatusResponse { 
-        connected: false, 
-        connecting: false 
+    let status = BotStatusResponse {
+        connected: false,
+        connecting: false,
     };
     let _ = bot_state.status_sender.send(status);
-    
+
     log_info!("连接断开");
     Json(ApiResponse {
         retcode: 0,
@@ -414,21 +575,32 @@ pub struct BotStatusResponse {
 }
 
 #[get("/bot/get_status")]
-pub fn get_bot_status(bot_state: &State<Arc<crate::server::BotConnectionState>>) -> Json<ApiResponse<BotStatusResponse>> {
-    let connected = bot_state.is_connected.load(std::sync::atomic::Ordering::SeqCst);
-    let connecting = bot_state.is_connecting.load(std::sync::atomic::Ordering::SeqCst);
+pub fn get_bot_status(
+    bot_state: &State<Arc<crate::server::BotConnectionState>>,
+) -> Json<ApiResponse<BotStatusResponse>> {
+    let connected = bot_state
+        .is_connected
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let connecting = bot_state
+        .is_connecting
+        .load(std::sync::atomic::Ordering::SeqCst);
     Json(ApiResponse {
         retcode: 0,
-        data: BotStatusResponse { connected, connecting },
+        data: BotStatusResponse {
+            connected,
+            connecting,
+        },
     })
 }
 
 #[get("/bot/status_stream")]
-pub fn bot_status_stream(bot_state: &State<Arc<crate::server::BotConnectionState>>) -> EventStream![Event + 'static] {
+pub fn bot_status_stream(
+    bot_state: &State<Arc<crate::server::BotConnectionState>>,
+) -> EventStream![Event + 'static] {
     let bot_state = bot_state.inner().clone();
     EventStream! {
         let mut rx = bot_state.status_sender.subscribe();
-        
+
         // 发送当前状态
         let connected = bot_state.is_connected.load(std::sync::atomic::Ordering::SeqCst);
         let connecting = bot_state.is_connecting.load(std::sync::atomic::Ordering::SeqCst);
@@ -436,7 +608,7 @@ pub fn bot_status_stream(bot_state: &State<Arc<crate::server::BotConnectionState
         if let Ok(json) = serde_json::to_string(&status) {
             yield Event::data(json);
         }
-        
+
         // 监听状态变化
         while let Ok(status) = rx.recv().await {
             if let Ok(json) = serde_json::to_string(&status) {
@@ -447,28 +619,33 @@ pub fn bot_status_stream(bot_state: &State<Arc<crate::server::BotConnectionState
 }
 
 #[post("/get_login_info", format = "json", data = "<_body>")]
-pub async fn get_login_info(_bot_state: &State<Arc<crate::server::BotConnectionState>>, _body: Json<serde_json::Value>) -> Json<ApiResponse<LoginInfo>> {
+pub async fn get_login_info(
+    _bot_state: &State<Arc<crate::server::BotConnectionState>>,
+    _body: Json<serde_json::Value>,
+) -> Json<ApiResponse<LoginInfo>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_file = exe_dir.join("config").join("config.json");
-    
+
     // 读取配置获取bot连接信息
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
             let api_url = format!("{}/get_login_info", config.get_api_url());
-            
+
             let client = reqwest::Client::new();
-            let mut request_builder = client.post(&api_url)
+            let mut request_builder = client
+                .post(&api_url)
                 .header("Content-Type", "application/json");
-            
+
             // 如果有token，添加Authorization header
             if let Some(ref token_str) = config.token {
-                request_builder = request_builder.header("Authorization", format!("Bearer {}", token_str));
+                request_builder =
+                    request_builder.header("Authorization", format!("Bearer {}", token_str));
             }
-            
+
             let body = serde_json::to_string(&serde_json::json!({})).unwrap_or_default();
             match request_builder.body(body).send().await {
                 Ok(response) => {
@@ -476,8 +653,14 @@ pub async fn get_login_info(_bot_state: &State<Arc<crate::server::BotConnectionS
                         // 解析bot返回的响应
                         if let Ok(bot_response) = serde_json::from_str::<serde_json::Value>(&text) {
                             if let (Some(uin), Some(nickname)) = (
-                                bot_response.get("data").and_then(|d| d.get("uin")).and_then(|u| u.as_i64()),
-                                bot_response.get("data").and_then(|d| d.get("nickname")).and_then(|n| n.as_str())
+                                bot_response
+                                    .get("data")
+                                    .and_then(|d| d.get("uin"))
+                                    .and_then(|u| u.as_i64()),
+                                bot_response
+                                    .get("data")
+                                    .and_then(|d| d.get("nickname"))
+                                    .and_then(|n| n.as_str()),
                             ) {
                                 return Json(ApiResponse {
                                     retcode: 0,
@@ -496,7 +679,7 @@ pub async fn get_login_info(_bot_state: &State<Arc<crate::server::BotConnectionS
             }
         }
     }
-    
+
     Json(ApiResponse {
         retcode: 1,
         data: LoginInfo {
@@ -511,30 +694,33 @@ pub fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionState>)
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_file = exe_dir.join("config").join("config.json");
-    
+
     // 读取配置文件
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
             if config.auto_connect && !config.host.is_empty() {
-                
                 // 设置连接状态
-                bot_state.should_connect.store(true, std::sync::atomic::Ordering::SeqCst);
-                bot_state.is_connecting.store(true, std::sync::atomic::Ordering::SeqCst);
-                
+                bot_state
+                    .should_connect
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                bot_state
+                    .is_connecting
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+
                 // 发送状态更新
-                let status = BotStatusResponse { 
-                    connected: false, 
-                    connecting: true 
+                let status = BotStatusResponse {
+                    connected: false,
+                    connecting: true,
                 };
                 let _ = bot_state.status_sender.send(status);
-                
+
                 // 启动连接
                 let token = config.token.clone();
                 let sse_url = config.get_event_url();
                 let bot_state_clone = bot_state.clone();
-                
+
                 tokio::spawn(async move {
                     connect_bot_sse(&sse_url, token, bot_state_clone).await;
                 });
@@ -548,14 +734,14 @@ fn update_auto_connect_status(auto_connect: bool) {
         .ok()
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let config_file = exe_dir.join("config").join("config.json");
-    
+
     // 读取现有配置
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(mut config) = serde_json::from_str::<BotConfig>(&content) {
             config.auto_connect = auto_connect;
-            
+
             // 保存更新后的配置
             if let Ok(json_str) = serde_json::to_string_pretty(&config) {
                 let _ = std::fs::write(&config_file, json_str);
@@ -564,88 +750,115 @@ fn update_auto_connect_status(auto_connect: bool) {
     }
 }
 
-async fn connect_bot_sse(sse_url: &str, token: Option<String>, bot_state: Arc<crate::server::BotConnectionState>) {
+async fn connect_bot_sse(
+    sse_url: &str,
+    token: Option<String>,
+    bot_state: Arc<crate::server::BotConnectionState>,
+) {
     loop {
         // 检查是否应该继续连接
-        if !bot_state.should_connect.load(std::sync::atomic::Ordering::SeqCst) {
+        if !bot_state
+            .should_connect
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             break;
         }
-        
+
         // 构建HTTP客户端
         let client = reqwest::Client::new();
-        let mut request_builder = client.get(sse_url)
+        let mut request_builder = client
+            .get(sse_url)
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache");
-        
+
         // 如果有token，添加Authorization header
         if let Some(ref token_str) = token {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", token_str));
+            request_builder =
+                request_builder.header("Authorization", format!("Bearer {}", token_str));
         }
-        
+
         match request_builder.send().await {
             Ok(response) => {
                 if response.status().is_success() {
                     log_info!("连接成功");
-                    bot_state.is_connected.store(true, std::sync::atomic::Ordering::SeqCst);
-                    bot_state.is_connecting.store(false, std::sync::atomic::Ordering::SeqCst);
-                    
+                    bot_state
+                        .is_connected
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    bot_state
+                        .is_connecting
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+
                     // 连接成功后，设置auto_connect为true
                     update_auto_connect_status(true);
-                    
+
                     // 发送连接成功状态
-                    let status = BotStatusResponse { 
-                        connected: true, 
-                        connecting: false 
+                    let status = BotStatusResponse {
+                        connected: true,
+                        connecting: false,
                     };
                     let _ = bot_state.status_sender.send(status);
-                    
+
                     let _ = handle_bot_sse_stream(response, bot_state.clone()).await;
-                    
-                    bot_state.is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+
+                    bot_state
+                        .is_connected
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                 } else {
                     log_error!("连接断开，重连中... (HTTP {})", response.status());
                 }
-                
+
                 // 检查是否应该继续重连
-                if !bot_state.should_connect.load(std::sync::atomic::Ordering::SeqCst) {
-                    bot_state.is_connecting.store(false, std::sync::atomic::Ordering::SeqCst);
-                    
+                if !bot_state
+                    .should_connect
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    bot_state
+                        .is_connecting
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+
                     // 用户主动断开连接，设置auto_connect为false
                     update_auto_connect_status(false);
-                    
+
                     // 发送断开状态
-                    let status = BotStatusResponse { 
-                        connected: false, 
-                        connecting: false 
+                    let status = BotStatusResponse {
+                        connected: false,
+                        connecting: false,
                     };
                     let _ = bot_state.status_sender.send(status);
                     break;
                 }
-                
-                bot_state.is_connecting.store(true, std::sync::atomic::Ordering::SeqCst);
-                
+
+                bot_state
+                    .is_connecting
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+
                 // 发送重连状态
-                let status = BotStatusResponse { 
-                    connected: false, 
-                    connecting: true 
+                let status = BotStatusResponse {
+                    connected: false,
+                    connecting: true,
                 };
                 let _ = bot_state.status_sender.send(status);
-                
+
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
             Err(e) => {
                 log_error!("连接断开，重连中... (错误: {})", e);
                 // 检查是否应该继续重连
-                if !bot_state.should_connect.load(std::sync::atomic::Ordering::SeqCst) {
-                    bot_state.is_connecting.store(false, std::sync::atomic::Ordering::SeqCst);
-                    
+                if !bot_state
+                    .should_connect
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    bot_state
+                        .is_connecting
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+
                     // 用户主动断开连接，设置auto_connect为false
                     update_auto_connect_status(false);
-                    
+
                     // 发送断开状态
-                    let status = BotStatusResponse { 
-                        connected: false, 
-                        connecting: false 
+                    let status = BotStatusResponse {
+                        connected: false,
+                        connecting: false,
                     };
                     let _ = bot_state.status_sender.send(status);
                     break;
@@ -661,9 +874,9 @@ async fn handle_bot_sse_stream(
     bot_state: Arc<crate::server::BotConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use futures_util::StreamExt;
-    
+
     let mut stream = response.bytes_stream();
-    
+
     loop {
         tokio::select! {
             chunk = stream.next() => {
@@ -691,25 +904,24 @@ async fn handle_bot_sse_stream(
             }
         }
     }
-    
+
     Ok(())
 }
-
 
 // 插件管理API
 
 #[get("/plugins/list")]
-pub async fn list_plugins(manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<Vec<crate::plus::manager::PluginInfo>>> {
+pub async fn list_plugins(
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<Vec<crate::plus::manager::PluginInfo>>> {
     // 重新加载插件列表
     let _ = manager.load_plugins().await;
-    
+
     match manager.list_plugins().await {
-        Ok(plugins) => {
-            Json(ApiResponse {
-                retcode: 0,
-                data: plugins,
-            })
-        }
+        Ok(plugins) => Json(ApiResponse {
+            retcode: 0,
+            data: plugins,
+        }),
         Err(e) => {
             log_error!("Failed to list plugins: {}", e);
             Json(ApiResponse {
@@ -721,8 +933,14 @@ pub async fn list_plugins(manager: &State<Arc<PluginManager>>) -> Json<ApiRespon
 }
 
 #[post("/plugins/<plugin_id>/start")]
-pub async fn start_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
-    let name = manager.get_plugin_name(&plugin_id).await.unwrap_or_else(|| plugin_id.clone());
+pub async fn start_plugin(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    let name = manager
+        .get_plugin_name(&plugin_id)
+        .await
+        .unwrap_or_else(|| plugin_id.clone());
     match manager.start_plugin(&plugin_id).await {
         Ok(_) => {
             log_info!("Plugin {}({}) started", name, plugin_id);
@@ -742,9 +960,15 @@ pub async fn start_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>
 }
 
 #[post("/plugins/<plugin_id>/stop")]
-pub async fn stop_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+pub async fn stop_plugin(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
     // API 调用被视为用户主动停止
-    let name = manager.get_plugin_name(&plugin_id).await.unwrap_or_else(|| plugin_id.clone());
+    let name = manager
+        .get_plugin_name(&plugin_id)
+        .await
+        .unwrap_or_else(|| plugin_id.clone());
     match manager.stop_plugin(&plugin_id, true).await {
         Ok(_) => {
             log_info!("Plugin {}({}) stopped", name, plugin_id);
@@ -764,14 +988,15 @@ pub async fn stop_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>)
 }
 
 #[get("/plugins/<plugin_id>/output")]
-pub async fn get_plugin_output(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<Vec<String>>> {
+pub async fn get_plugin_output(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<Vec<String>>> {
     match manager.get_plugin_output(&plugin_id).await {
-        Ok(output) => {
-            Json(ApiResponse {
-                retcode: 0,
-                data: output,
-            })
-        }
+        Ok(output) => Json(ApiResponse {
+            retcode: 0,
+            data: output,
+        }),
         Err(e) => {
             log_error!("Failed to get plugin output: {}", e);
             Json(ApiResponse {
@@ -783,14 +1008,15 @@ pub async fn get_plugin_output(plugin_id: String, manager: &State<Arc<PluginMana
 }
 
 #[post("/plugins/<plugin_id>/output/clear")]
-pub async fn clear_plugin_output(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+pub async fn clear_plugin_output(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
     match manager.clear_plugin_output(&plugin_id).await {
-        Ok(_) => {
-            Json(ApiResponse {
-                retcode: 0,
-                data: "Output cleared".to_string(),
-            })
-        }
+        Ok(_) => Json(ApiResponse {
+            retcode: 0,
+            data: "Output cleared".to_string(),
+        }),
         Err(e) => {
             log_error!("Failed to clear plugin output: {}", e);
             Json(ApiResponse {
@@ -806,7 +1032,7 @@ pub fn plugins_status_stream(manager: &State<Arc<PluginManager>>) -> EventStream
     let manager = manager.inner().clone();
     EventStream! {
         let mut rx = manager.subscribe_status();
-        
+
         loop {
             match rx.recv().await {
                 Ok(event) => {
@@ -823,7 +1049,10 @@ pub fn plugins_status_stream(manager: &State<Arc<PluginManager>>) -> EventStream
 }
 
 #[get("/plugins/<plugin_id>/output/stream")]
-pub fn plugin_output_stream(plugin_id: String, manager: &State<Arc<PluginManager>>) -> EventStream![Event + 'static] {
+pub fn plugin_output_stream(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> EventStream![Event + 'static] {
     let manager = manager.inner().clone();
     let target_plugin = plugin_id.clone();
     EventStream! {
@@ -835,10 +1064,10 @@ pub fn plugin_output_stream(plugin_id: String, manager: &State<Arc<PluginManager
                 }
             }
         }
-        
+
         // 订阅实时输出
         let mut rx = manager.subscribe_output();
-        
+
         // 持续监听新的输出
         loop {
             match rx.recv().await {
@@ -864,87 +1093,69 @@ pub struct ExportPluginRequest {
 }
 
 #[post("/plugins/export", format = "json", data = "<req>")]
-pub async fn export_plugin(req: Json<ExportPluginRequest>, plugin_manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+pub async fn export_plugin(
+    req: Json<ExportPluginRequest>,
+    plugin_manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
     let plugin_id = &req.plugin_id;
-    
+
     // Get plugin directory
     let plugin_dir = match plugin_manager.get_plugin_dir(plugin_id).await {
         Some(path) => path,
-        None => return Json(ApiResponse {
-            retcode: 1,
-            data: "Plugin not found".to_string(),
-        }),
+        None => {
+            return Json(ApiResponse {
+                retcode: 1,
+                data: "Plugin not found".to_string(),
+            })
+        }
     };
 
     // Run file dialog and compression in a blocking task
     // clone plugin_id for the closure
     let plugin_id_clone = plugin_id.clone();
-    
+
     let result = tokio::task::spawn_blocking(move || {
         // Open file dialog
         // Default name: <plugin_id>.yuyu.7z
-        // Filter: 7z (but we write zip)
         let target_path = rfd::FileDialog::new()
-            .set_file_name(&format!("{}.yuyu.7z", plugin_id_clone))
+            .set_file_name(format!("{}.yuyu.7z", plugin_id_clone))
+            .add_filter("Yuyu Plugin", &["yuyu.7z"])
             .add_filter("7z Archive", &["7z"])
-            .add_filter("Zip Archive", &["zip"])
             .save_file();
-            
+
         let target_path = match target_path {
             Some(p) => p,
             None => return Ok("Export cancelled".to_string()),
         };
 
-        // Create zip file
-        let file = std::fs::File::create(&target_path).map_err(|e| format!("Failed to create file: {}", e))?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o755);
+        sevenz_rust2::compress_to_path(&plugin_dir, &target_path)
+            .map_err(|e| format!("Failed to create 7z archive: {}", e))?;
 
-        let walkdir = walkdir::WalkDir::new(&plugin_dir);
-        let it = walkdir.into_iter();
-
-        for entry in it {
-            let entry = entry.map_err(|e| format!("Failed to walk directory: {}", e))?;
-            let path = entry.path();
-            
-            // Calculate relative path
-            let name = path.strip_prefix(&plugin_dir)
-                .map_err(|e| format!("Failed to strip prefix: {}", e))?
-                .to_str()
-                .ok_or("Invalid path encoding")?;
-                
-            // Convert backslashes to forward slashes for zip compatibility
-            let name = name.replace('\\', "/");
-
-            if name.is_empty() {
-                continue;
-            }
-
-            if path.is_file() {
-                zip.start_file(name, options).map_err(|e| format!("Failed to start file in zip: {}", e))?;
-                let mut f = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-                std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to write file to zip: {}", e))?;
-            } else if !name.is_empty() {
-                // zip.add_directory(name, options).map_err(...) // Optional for directories
-            }
-        }
-        
-        zip.finish().map_err(|e| format!("Failed to finish zip: {}", e))?;
-        
         Ok::<String, String>("Export successful".to_string())
-    }).await;
+    })
+    .await;
 
     match result {
-        Ok(Ok(msg)) => Json(ApiResponse { retcode: 0, data: msg }),
-        Ok(Err(e)) => Json(ApiResponse { retcode: 1, data: e }),
-        Err(e) => Json(ApiResponse { retcode: 1, data: format!("Task failed: {}", e) }),
+        Ok(Ok(msg)) => Json(ApiResponse {
+            retcode: 0,
+            data: msg,
+        }),
+        Ok(Err(e)) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: format!("Task failed: {}", e),
+        }),
     }
 }
 
 #[post("/plugins/<plugin_id>/uninstall")]
-pub async fn uninstall_plugin(plugin_id: String, manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+pub async fn uninstall_plugin(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
     match manager.delete_plugin(&plugin_id).await {
         Ok(_) => {
             log_info!("Plugin {} uninstalled", plugin_id);
@@ -964,21 +1175,24 @@ pub async fn uninstall_plugin(plugin_id: String, manager: &State<Arc<PluginManag
 }
 
 #[post("/plugins/import")]
-pub async fn import_plugin(plugin_manager: &State<Arc<PluginManager>>) -> Json<ApiResponse<String>> {
+pub async fn import_plugin(
+    plugin_manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
     let plugins_root = plugin_manager.get_plugins_root();
-    
+
     let result = tokio::task::spawn_blocking(move || {
         // Open file dialog
         let target_path = rfd::FileDialog::new()
             .add_filter("Yuyu Plugin", &["yuyu.7z"])
             .pick_file();
-            
+
         let target_path = match target_path {
             Some(p) => p,
             None => return Ok("Import cancelled".to_string()),
         };
 
-        let filename = target_path.file_name()
+        let filename = target_path
+            .file_name()
             .ok_or("Invalid filename")?
             .to_string_lossy()
             .to_string();
@@ -989,11 +1203,12 @@ pub async fn import_plugin(plugin_manager: &State<Arc<PluginManager>>) -> Json<A
 
         // Determine plugin ID from filename
         // e.g. "myplugin.yuyu.7z" -> "myplugin"
-        let file_stem = target_path.file_stem()
+        let file_stem = target_path
+            .file_stem()
             .ok_or("Invalid filename")?
             .to_string_lossy()
             .to_string();
-            
+
         // If it ends with .yuyu, remove it
         let plugin_id = if file_stem.ends_with(".yuyu") {
             file_stem.trim_end_matches(".yuyu").to_string()
@@ -1002,58 +1217,60 @@ pub async fn import_plugin(plugin_manager: &State<Arc<PluginManager>>) -> Json<A
         };
 
         if plugin_id.is_empty() {
-             return Err("Could not determine plugin ID from filename".to_string());
+            return Err("Could not determine plugin ID from filename".to_string());
         }
 
         let target_dir = plugins_root.join(&plugin_id);
-        
+
         if target_dir.exists() {
             return Err(format!("Plugin directory already exists: {}", plugin_id));
         }
 
         // Create target directory
-        std::fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
 
-        // Open zip file
-        let file = std::fs::File::open(&target_path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let detect_format_and_extract = || -> Result<(), String> {
+            use std::io::Read;
 
-        // Extract files
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i).map_err(|e| format!("Failed to read file from zip: {}", e))?;
-            let outpath = match file.enclosed_name() {
-                Some(path) => target_dir.join(path),
-                None => continue,
-            };
+            let mut header = [0u8; 6];
+            let mut f = std::fs::File::open(&target_path)
+                .map_err(|e| format!("Failed to open file: {}", e))?;
+            let n = f
+                .read(&mut header)
+                .map_err(|e| format!("Failed to read file header: {}", e))?;
 
-            if (*file.name()).ends_with('/') {
-                std::fs::create_dir_all(&outpath).map_err(|e| format!("Failed to create directory: {}", e))?;
-            } else {
-                if let Some(p) = outpath.parent() {
-                    if !p.exists() {
-                        std::fs::create_dir_all(p).map_err(|e| format!("Failed to create directory: {}", e))?;
-                    }
-                }
-                let mut outfile = std::fs::File::create(&outpath).map_err(|e| format!("Failed to create file: {}", e))?;
-                std::io::copy(&mut file, &mut outfile).map_err(|e| format!("Failed to write file: {}", e))?;
+            if n < 6 || header != [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
+                return Err("Invalid plugin archive. Must be a valid 7z file".to_string());
             }
 
-            // Get and Set permissions
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Some(mode) = file.unix_mode() {
-                    std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode)).unwrap();
-                }
-            }
+            sevenz_rust2::decompress_file(&target_path, &target_dir)
+                .map_err(|e| format!("Failed to extract 7z archive: {}", e))?;
+
+            Ok(())
+        };
+
+        if let Err(e) = detect_format_and_extract() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+            return Err(e);
         }
 
         Ok::<String, String>(format!("Plugin {} imported successfully", plugin_id))
-    }).await;
+    })
+    .await;
 
     match result {
-        Ok(Ok(msg)) => Json(ApiResponse { retcode: 0, data: msg }),
-        Ok(Err(e)) => Json(ApiResponse { retcode: 1, data: e }),
-        Err(e) => Json(ApiResponse { retcode: 1, data: format!("Task failed: {}", e) }),
+        Ok(Ok(msg)) => Json(ApiResponse {
+            retcode: 0,
+            data: msg,
+        }),
+        Ok(Err(e)) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: format!("Task failed: {}", e),
+        }),
     }
 }

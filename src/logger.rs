@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 use chrono::Local;
-use serde::Serialize;
-use tokio::sync::broadcast;
 use lazy_static::lazy_static;
+use serde::Serialize;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
@@ -30,7 +30,7 @@ lazy_static! {
 
 pub fn init_logger() {
     // 初始化 tracing 订阅者
-    let _ = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(true)
         .init();

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -25,6 +25,12 @@ pub enum PluginStatus {
     Error,
 }
 
+#[derive(Debug, Clone)]
+pub struct PluginWebUi {
+    pub webui: String,
+    pub port: u16,
+}
+
 pub struct Plugin {
     /// 插件唯一ID（文件夹名）
     pub id: String,
@@ -33,13 +39,21 @@ pub struct Plugin {
     pub tmp_dir: PathBuf,
     pub status: Arc<Mutex<PluginStatus>>,
     pub is_alive: Arc<AtomicBool>,
-    pub should_stop: Arc<AtomicBool>,
+    pub run_id: Arc<AtomicU64>,
+    pub stop_run_id: Arc<AtomicU64>,
     pub output: Arc<Mutex<Vec<String>>>,
     pub enabled: Arc<Mutex<bool>>,
+    pub api_token: Arc<Mutex<Option<String>>>,
+    pub webui: Arc<Mutex<Option<PluginWebUi>>>,
 }
 
 impl Plugin {
-    pub fn new(id: String, manifest: PluginManifest, plugin_dir: PathBuf, tmp_dir: PathBuf) -> Self {
+    pub fn new(
+        id: String,
+        manifest: PluginManifest,
+        plugin_dir: PathBuf,
+        tmp_dir: PathBuf,
+    ) -> Self {
         Self {
             id,
             manifest,
@@ -47,18 +61,37 @@ impl Plugin {
             tmp_dir,
             status: Arc::new(Mutex::new(PluginStatus::Stopped)),
             is_alive: Arc::new(AtomicBool::new(false)),
-            should_stop: Arc::new(AtomicBool::new(false)),
+            run_id: Arc::new(AtomicU64::new(0)),
+            stop_run_id: Arc::new(AtomicU64::new(0)),
             output: Arc::new(Mutex::new(Vec::new())),
             enabled: Arc::new(Mutex::new(false)),
+            api_token: Arc::new(Mutex::new(None)),
+            webui: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub fn should_stop(&self) -> bool {
-        self.should_stop.load(Ordering::Relaxed)
+    pub fn begin_run(&self) -> u64 {
+        let new_run_id = self.run_id.fetch_add(1, Ordering::Relaxed) + 1;
+        self.stop_run_id.store(0, Ordering::Relaxed);
+        new_run_id
     }
 
-    pub fn set_should_stop(&self, stop: bool) {
-        self.should_stop.store(stop, Ordering::Relaxed);
+    pub fn current_run_id(&self) -> u64 {
+        self.run_id.load(Ordering::Relaxed)
+    }
+
+    pub fn is_current_run(&self, run_id: u64) -> bool {
+        self.current_run_id() == run_id
+    }
+
+    pub fn request_stop_current_run(&self) -> u64 {
+        let run_id = self.current_run_id();
+        self.stop_run_id.store(run_id, Ordering::Relaxed);
+        run_id
+    }
+
+    pub fn should_stop_run(&self, run_id: u64) -> bool {
+        run_id != 0 && self.stop_run_id.load(Ordering::Relaxed) == run_id
     }
 
     pub async fn get_status(&self) -> PluginStatus {
@@ -96,5 +129,33 @@ impl Plugin {
 
     pub async fn clear_output(&self) {
         self.output.lock().await.clear();
+    }
+
+    pub async fn set_api_token(&self, token: Option<String>) {
+        *self.api_token.lock().await = token;
+    }
+
+    pub async fn get_api_token(&self) -> Option<String> {
+        self.api_token.lock().await.clone()
+    }
+
+    pub async fn set_webui(&self, webui: String, port: u16) {
+        *self.webui.lock().await = Some(PluginWebUi { webui, port });
+    }
+
+    pub async fn clear_webui(&self) {
+        *self.webui.lock().await = None;
+    }
+
+    pub async fn get_webui_url(&self) -> Option<String> {
+        let config = self.webui.lock().await.clone()?;
+        let mut path = config.webui;
+        if path.is_empty() {
+            path = "/".to_string();
+        }
+        if !path.starts_with('/') {
+            path = format!("/{}", path);
+        }
+        Some(format!("http://localhost:{}{}", config.port, path))
     }
 }
