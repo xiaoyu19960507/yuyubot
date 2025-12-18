@@ -106,6 +106,10 @@ impl Plugin {
         self.is_alive.store(alive, Ordering::Relaxed);
     }
 
+    pub fn is_process_alive(&self) -> bool {
+        self.is_alive.load(Ordering::Relaxed)
+    }
+
     pub async fn is_enabled(&self) -> bool {
         *self.enabled.lock().await
     }

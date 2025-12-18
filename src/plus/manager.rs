@@ -81,6 +81,70 @@ impl PluginManager {
         self.exe_dir.join("app")
     }
 
+    pub fn cleanup_tmp_apps(&self) {
+        let tmp_apps_dir = self.exe_dir.join("tmp").join("app");
+        if !tmp_apps_dir.exists() {
+            return;
+        }
+
+        let mut last_err = None;
+        for _ in 0..40 {
+            if let Ok(entries) = std::fs::read_dir(&tmp_apps_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+
+            match std::fs::remove_dir_all(&tmp_apps_dir) {
+                Ok(_) => return,
+                Err(e) => last_err = Some(e),
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+
+        if tmp_apps_dir.exists() {
+            if let Some(e) = last_err {
+                log_warn!("Failed to cleanup tmp/app: {}", e);
+            } else {
+                log_warn!("Failed to cleanup tmp/app");
+            }
+        }
+    }
+
+    pub async fn stop_all_plugins_and_wait(&self, max_wait: std::time::Duration) {
+        let plugins = self.plugins.read().await;
+        let plugin_ids: Vec<String> = plugins.keys().cloned().collect();
+        let plugin_refs: Vec<Arc<Plugin>> = plugins.values().cloned().collect();
+        drop(plugins);
+
+        for id in plugin_ids {
+            let _ = self.stop_plugin(&id, false).await;
+        }
+
+        let deadline = std::time::Instant::now() + max_wait;
+        loop {
+            let mut any_alive = false;
+            for plugin in &plugin_refs {
+                if plugin.is_process_alive() {
+                    any_alive = true;
+                    break;
+                }
+            }
+
+            if !any_alive {
+                break;
+            }
+
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     fn get_config_path(&self) -> PathBuf {
         self.exe_dir.join("config").join("plugins.json")
     }

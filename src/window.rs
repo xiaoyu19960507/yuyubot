@@ -265,8 +265,12 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                 log_info!("正在停止所有插件...");
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    server_state.plugin_manager.stop_all_plugins().await;
+                    server_state
+                        .plugin_manager
+                        .stop_all_plugins_and_wait(std::time::Duration::from_secs(8))
+                        .await;
                 });
+                server_state.plugin_manager.cleanup_tmp_apps();
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
