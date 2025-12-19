@@ -228,6 +228,9 @@ import json
 import requests
 import urllib3
 import sseclient
+import socket
+import sys
+import time
 
 # 从环境变量获取配置
 HOST = os.environ['MILKY_HOST']
@@ -258,51 +261,74 @@ def send_group_message(group_id, text):
             {"type": "text", "data": {"text": text}}
         ]
     }
-    requests.post(
-        f"{API_URL}/send_group_message",
-        json=payload,
-        headers=get_headers(),
-        timeout=10,
-    )
+    try:
+        requests.post(
+            f"{API_URL}/send_group_message",
+            json=payload,
+            headers=get_headers(),
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"发送消息失败: {e}")
 
 def main():
     print("复读机插件已启动")
 
-    headers = (
-        {'Accept': 'text/event-stream', 'Authorization': f'Bearer {TOKEN}'}
-        if TOKEN
-        else {'Accept': 'text/event-stream'}
-    )
-    response = urllib3.PoolManager().request(
-        'GET',
-        EVENT_URL,
-        preload_content=False,
-        headers=headers,
-    )
+    headers = {'Accept': 'text/event-stream'}
+    if TOKEN:
+        headers['Authorization'] = f'Bearer {TOKEN}'
+    
+    # 设置全局 socket 超时 (1.5秒)
+    # 这样 urllib3 的阻塞读取会定期抛出 timeout 异常，将控制权交还给 Python
+    # 从而让 Python 有机会检查并响应 KeyboardInterrupt (Ctrl+C)
+    socket.setdefaulttimeout(1.5)
+    
+    http = urllib3.PoolManager()
 
-    client = sseclient.SSEClient(response)
-    for event in client.events():
+    while True:
         try:
-            evt = json.loads(event.data)
-        except json.JSONDecodeError:
+            response = http.request(
+                'GET',
+                EVENT_URL,
+                preload_content=False,
+                headers=headers,
+            )
+
+            client = sseclient.SSEClient(response)
+            for event in client.events():
+                try:
+                    evt = json.loads(event.data)
+                except json.JSONDecodeError:
+                    continue
+
+                if evt.get('event_type') != 'message_receive':
+                    continue
+
+                msg = evt.get('data', {})
+                if msg.get('message_scene') != 'group':
+                    continue
+
+                group_id = msg.get('peer_id')
+                text = get_plain_text(msg.get('segments', []))
+
+                if not text.startswith('/echo '):
+                    continue
+
+                content = text[len('/echo '):]
+                send_group_message(group_id, content)
+                print(f"复读: {content}")
+
+        except (socket.timeout, urllib3.exceptions.ReadTimeoutError):
+            # 读取超时是预期的（为了检查 Ctrl+C），直接 continue 进行下一次循环（重连）
             continue
-
-        if evt.get('event_type') != 'message_receive':
-            continue
-
-        msg = evt.get('data', {})
-        if msg.get('message_scene') != 'group':
-            continue
-
-        group_id = msg.get('peer_id')
-        text = get_plain_text(msg.get('segments', []))
-
-        if not text.startswith('/echo '):
-            continue
-
-        content = text[len('/echo '):]
-        send_group_message(group_id, content)
-        print(f"复读: {content}")
+        except KeyboardInterrupt:
+            # 捕获 Ctrl+C 信号，优雅退出
+            print("插件正在退出...")
+            sys.exit(0)
+        except Exception as e:
+            # 其他网络错误，等待一会再重试
+            print(f"连接错误: {e}")
+            time.sleep(2)
 
 if __name__ == '__main__':
     main()

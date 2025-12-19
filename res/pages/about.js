@@ -36,7 +36,10 @@ const AboutPage = {
       </div>
       <div class="card user-card">
         <div class="user-avatar"><img src="favicon.ico" alt="Avatar"></div>
-        <div class="user-info"><h3>羽羽BOT</h3><p>OO机器人平台的插件管理工具，Milky应用端</p></div>
+        <div class="user-info">
+          <h3>羽羽BOT</h3>
+          <p>OO机器人平台的插件管理工具，Milky应用端。名称取自《xxxHOLiC》中的五月七日小羽——一位在孤独中依然保持纯真与勇敢，拥有通灵能力的温柔少女。</p>
+        </div>
       </div>
       <div class="card">
         <div class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>版本信息</div>
@@ -59,6 +62,15 @@ const AboutPage = {
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
           
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #e91e63; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">X</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">Xiaoyu</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">灵魂作者</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">幻梦原点</div>
+             </div>
+          </div>
+
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
              <div style="width: 40px; height: 40px; border-radius: 50%; background: #6b5b95; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">C</div>
              <div>
                 <div style="font-weight: 600; font-size: 14px;">Claude Opus 4.5</div>
@@ -70,9 +82,27 @@ const AboutPage = {
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
              <div style="width: 40px; height: 40px; border-radius: 50%; background: #4caf50; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
              <div>
-                <div style="font-weight: 600; font-size: 14px;">Gemini3 Pro Preview</div>
+                <div style="font-weight: 600; font-size: 14px;">Gemini 3 Pro Preview</div>
                 <div style="font-size: 12px; color: var(--text-secondary);">第二作者</div>
                  <div style="font-size: 12px; color: var(--accent-color);">极速智囊团</div>
+             </div>
+          </div>
+
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #00bcd4; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">Gemini 3 Flash Preview</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">第三作者</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">灵感闪击手</div>
+             </div>
+          </div>
+
+          <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #007acc; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">V</div>
+             <div>
+                <div style="font-weight: 600; font-size: 14px;">Microsoft VS Code</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">第四作者</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">微软大战代码</div>
              </div>
           </div>
 
