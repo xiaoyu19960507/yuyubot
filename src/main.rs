@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod logger;
+mod error;
 mod plus;
 mod runtime;
 mod server;
@@ -13,7 +14,6 @@ use rust_embed::Embed;
 #[folder = "res/"]
 pub struct Assets;
 
-#[cfg(target_os = "windows")]
 mod windows_console {
     use windows_sys::Win32::System::Console::{
         SetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
@@ -24,9 +24,9 @@ mod windows_console {
             // 还原标准句柄为 NULL (0)
             // 模拟 GUI 程序首次启动时的“无句柄”状态
             // 这样 expectrl 会认为没有控制台，从而自动创建 ConPTY 环境
-            SetStdHandle(STD_INPUT_HANDLE, 0);
-            SetStdHandle(STD_OUTPUT_HANDLE, 0);
-            SetStdHandle(STD_ERROR_HANDLE, 0);
+            SetStdHandle(STD_INPUT_HANDLE, std::ptr::null_mut());
+            SetStdHandle(STD_OUTPUT_HANDLE, std::ptr::null_mut());
+            SetStdHandle(STD_ERROR_HANDLE, std::ptr::null_mut());
         }
     }
 }
@@ -34,13 +34,10 @@ mod windows_console {
 fn main() {
     logger::init_logger();
 
-    #[cfg(target_os = "windows")]
-    {
-        // 如果是重启启动的，重新分配一个隐藏的控制台，以支持 expectrl/pty
-        if std::env::args().any(|arg| arg == "--restarted") {
-            windows_console::ensure_hidden_console();
-            log_info!("检测到重启启动，已重建控制台环境");
-        }
+    // 如果是重启启动的，重新分配一个隐藏的控制台，以支持 expectrl/pty
+    if std::env::args().any(|arg| arg == "--restarted") {
+        windows_console::ensure_hidden_console();
+        log_info!("检测到重启启动，已重建控制台环境");
     }
 
     log_info!("框架启动");

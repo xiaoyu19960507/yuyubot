@@ -314,14 +314,13 @@ if __name__ == '__main__':
 
 接口：
 
-- `POST http://{YUYU_HOST}:{YUYU_PORT}/set_webui_port`
+- `POST http://{YUYU_HOST}:{YUYU_PORT}/set_webui`
 - Header：`Authorization: Bearer {YUYU_TOKEN}`
 - Body（JSON）：
 
 ```json
 {
-  "webui": "/",
-  "port": 12345
+  "webui": "http://127.0.0.1:1207"
 }
 ```
 

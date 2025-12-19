@@ -78,10 +78,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     // 预先创建插件管理器，以便返回给 main 函数使用
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     // 使用全局 Runtime spawn 服务器任务，而不是创建新的 Runtime
     runtime::spawn(async move {
@@ -122,10 +119,12 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
             };
 
             let data_dir = exe_dir.join("data").to_string_lossy().to_string();
+            let plugins_root = exe_dir.join("app").to_string_lossy().to_string();
 
             let system_info = Arc::new(api::SystemInfo {
                 port: std::sync::atomic::AtomicU16::new(main_port),
                 data_dir,
+                plugins_root,
             });
 
             let (status_sender, _) = broadcast::channel(100);
@@ -156,7 +155,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 .manage(bot_config_state.clone())
                 .manage(plugin_manager.clone())
                 .manage(main_proxy.clone())
-                .mount("/", routes![index, assets, api::set_webui_port])
+                .mount("/", routes![index, assets, api::set_webui])
                 .mount(
                     "/api",
                     routes![
@@ -166,6 +165,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                         api::logs_stream,
                         api::get_system_info,
                         api::open_data_dir,
+                        api::open_plugins_dir,
                         api::restart_program,
                         api::get_app_info,
                         api::get_bot_config,
@@ -182,6 +182,8 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                         api::import_plugin,
                         api::get_plugin_output,
                         api::clear_plugin_output,
+                        api::open_plugin_dir,
+                        api::open_plugin_data_dir,
                         api::plugin_output_stream,
                         api::plugins_status_stream,
                         api::plugins_events_stream,

@@ -9,6 +9,7 @@ const PluginsPage = {
       loading: false,
       autoScroll: true,
       pendingStatusUpdates: {},
+      activeMoreMenu: null,
       confirmDialog: {
         show: false,
         title: '',
@@ -63,10 +64,7 @@ const PluginsPage = {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 菜单
               </button>
-              <button class="btn-primary" @click.stop="exportPlugin(plugin.id)" :disabled="loading" style="margin-right: 5px;" title="导出插件">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                导出
-              </button>
+              
               <button v-if="!plugin.enabled" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 启动
@@ -75,10 +73,30 @@ const PluginsPage = {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
                 停止
               </button>
-              <button class="btn-danger" @click.stop="uninstallPlugin(plugin.id)" :disabled="loading || plugin.status === 'running'" title="卸载插件">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                卸载
-              </button>
+
+              <div class="more-actions-wrapper" @click.stop>
+                <button class="btn-more" @click="toggleMoreMenu(plugin.id)" title="更多操作">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+                </button>
+                <div v-if="activeMoreMenu === plugin.id" class="more-menu">
+                  <button class="btn-primary" @click="openPluginDir(plugin.id); activeMoreMenu = null" title="插件目录">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    插件目录
+                  </button>
+                  <button class="btn-primary" @click="openPluginDataDir(plugin.id); activeMoreMenu = null" title="数据目录">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    数据目录
+                  </button>
+                  <button class="btn-primary" @click="exportPlugin(plugin.id); activeMoreMenu = null" :disabled="loading" title="导出插件">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    导出
+                  </button>
+                  <button class="btn-danger" @click="uninstallPlugin(plugin.id); activeMoreMenu = null" :disabled="loading || plugin.status === 'running'" title="卸载插件">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    卸载
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -117,11 +135,18 @@ const PluginsPage = {
   mounted() {
     this.loadPlugins();
     this.connectEventsSSE();
+    this.clickListener = () => {
+      this.activeMoreMenu = null;
+    };
+    window.addEventListener('click', this.clickListener);
   },
   beforeUnmount() {
     if (this.eventsEventSource) {
       this.eventsEventSource.close();
       this.eventsEventSource = null;
+    }
+    if (this.clickListener) {
+      window.removeEventListener('click', this.clickListener);
     }
   },
   methods: {
@@ -138,6 +163,13 @@ const PluginsPage = {
         this.selectedPlugin = null;
       } else {
         this.selectedPlugin = id;
+      }
+    },
+    toggleMoreMenu(id) {
+      if (this.activeMoreMenu === id) {
+        this.activeMoreMenu = null;
+      } else {
+        this.activeMoreMenu = id;
       }
     },
     confirmAction() {
@@ -224,6 +256,32 @@ const PluginsPage = {
           .finally(() => { this.loading = false; });
         }
       };
+    },
+    openPluginDir(id) {
+      fetch('/api/plugins/' + encodeURIComponent(id) + '/open_dir', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.retcode !== 0) {
+            window.showToast('打开目录失败: ' + data.data, 'error');
+          }
+        })
+        .catch(err => {
+          console.error('Failed to open plugin dir:', err);
+          window.showToast('打开目录失败: ' + err, 'error');
+        });
+    },
+    openPluginDataDir(id) {
+      fetch('/api/plugins/' + encodeURIComponent(id) + '/open_data_dir', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.retcode !== 0) {
+            window.showToast('打开数据目录失败: ' + data.data, 'error');
+          }
+        })
+        .catch(err => {
+          console.error('Failed to open plugin data dir:', err);
+          window.showToast('打开数据目录失败: ' + err, 'error');
+        });
     },
     loadPlugins() {
       this.loading = true;

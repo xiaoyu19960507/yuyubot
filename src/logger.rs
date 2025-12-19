@@ -1,9 +1,10 @@
 use chrono::Local;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
@@ -18,22 +19,79 @@ pub struct LoggerState {
     tx: broadcast::Sender<LogEntry>,
 }
 
-lazy_static! {
-    static ref LOGGER: Arc<Mutex<LoggerState>> = {
-        let (tx, _) = broadcast::channel(100);
-        Arc::new(Mutex::new(LoggerState {
-            logs: VecDeque::with_capacity(1000),
-            tx,
-        }))
-    };
+static LOGGER: Lazy<Arc<Mutex<LoggerState>>> = Lazy::new(|| {
+    let (tx, _) = broadcast::channel(100);
+    Arc::new(Mutex::new(LoggerState {
+        logs: VecDeque::with_capacity(1000),
+        tx,
+    }))
+});
+
+use once_cell::sync::OnceCell;
+
+static LOGGER_INIT: OnceCell<()> = OnceCell::new();
+
+struct AppLogLayer;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for AppLogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let metadata = event.metadata();
+        let level = metadata.level().to_string().to_lowercase();
+        let target = metadata.target();
+
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+
+        if !visitor.message.is_empty() {
+            log_message(&level, target, visitor.message);
+        }
+    }
+}
+
+#[derive(Default)]
+struct MessageVisitor {
+    message: String,
+}
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{:?}", value);
+            // 去除包裹在消息外的引号（如果是 Debug 格式化出来的）
+            if self.message.starts_with('"') && self.message.ends_with('"') {
+                self.message = self.message[1..self.message.len() - 1].to_string();
+            }
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        }
+    }
 }
 
 pub fn init_logger() {
-    // 初始化 tracing 订阅者
-    // tracing_subscriber::fmt()
-    //     .with_writer(std::io::stderr)
-    //     .with_ansi(true)
-    //     .init();
+    LOGGER_INIT.get_or_init(|| {
+        let filter = EnvFilter::from_default_env()
+            .add_directive(tracing::Level::INFO.into())
+            .add_directive("rocket=off".parse().unwrap()) // 完全屏蔽 Rocket 的所有日志
+            .add_directive("hyper=off".parse().unwrap()); // 屏蔽底层 hyper 库的日志
+
+        let registry = tracing_subscriber::registry()
+            .with(AppLogLayer)
+            .with(filter);
+
+        // 仅在环境变量 YUYU_LOG_STDERR 设置时才输出到 stderr
+        // 避免在 Windows GUI 模式下 hijack 插件控制台输出
+        if std::env::var("YUYU_LOG_STDERR").is_ok() {
+            registry
+                .with(fmt::layer().with_writer(std::io::stderr).with_ansi(true))
+                .init();
+        } else {
+            registry.init();
+        }
+    });
 }
 
 pub fn log_message(level: &str, source: &str, message: String) {
@@ -80,43 +138,27 @@ pub fn subscribe_logs() -> broadcast::Receiver<LogEntry> {
 #[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        {
-            let msg = format!($($arg)*);
-            tracing::info!("{}", msg);
-            $crate::logger::log_message("info", "[核心]", msg);
-        }
+        tracing::info!(target: "[核心]", $($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => {
-        {
-            let msg = format!($($arg)*);
-            tracing::error!("{}", msg);
-            $crate::logger::log_message("error", "[核心]", msg);
-        }
+        tracing::error!(target: "[核心]", $($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! log_warn {
     ($($arg:tt)*) => {
-        {
-            let msg = format!($($arg)*);
-            tracing::warn!("{}", msg);
-            $crate::logger::log_message("warn", "[核心]", msg);
-        }
+        tracing::warn!(target: "[核心]", $($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {
-        {
-            let msg = format!($($arg)*);
-            tracing::debug!("{}", msg);
-            $crate::logger::log_message("debug", "[核心]", msg);
-        }
+        tracing::debug!(target: "[核心]", $($arg)*);
     };
 }

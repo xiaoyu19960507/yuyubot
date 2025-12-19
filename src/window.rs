@@ -24,6 +24,7 @@ pub enum UserEvent {
     MenuEvent(MenuEvent),
     NewWindowRequested(String),
     StartDrag(WindowId),
+    CloseWindow(WindowId),
     RestartRequested,
 }
 
@@ -49,6 +50,11 @@ fn create_webview(
 
     WebViewBuilder::new()
         .with_url(url)
+        .with_initialization_script(r#"
+            window.close = function() {
+                window.ipc.postMessage('close_window');
+            };
+        "#)
         .with_document_title_changed_handler(move |title| {
             let _ = proxy_for_title.send_event(UserEvent::TitleChanged(window_id, title));
         })
@@ -60,6 +66,8 @@ fn create_webview(
             let msg = request.body();
             if msg == "drag_window" {
                 let _ = proxy_for_ipc.send_event(UserEvent::StartDrag(window_id_for_ipc));
+            } else if msg == "close_window" {
+                let _ = proxy_for_ipc.send_event(UserEvent::CloseWindow(window_id_for_ipc));
             }
         })
         .build(window)
@@ -290,7 +298,6 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
             .build()
             .ok();
 
-        #[cfg(target_os = "windows")]
         if let Some(t) = &tray {
             t.set_show_menu_on_left_click(false);
         }
@@ -330,24 +337,22 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
 
                 if is_restarting {
                     log_info!("正在重启程序...");
-                    if let Ok(exe_path) = std::env::current_exe() {
-                        #[cfg(target_os = "windows")]
-                        {
-                            use std::os::windows::process::CommandExt;
-                            let detached_process = 0x00000008;
-                            let _ = std::process::Command::new(&exe_path)
-                                .arg("--restarted")
-                                .creation_flags(detached_process)
-                                .stdin(std::process::Stdio::null())
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .spawn();
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        {
-                            let _ = std::process::Command::new(exe_path).spawn();
-                        }
-                    }
+                    let exe_path = runtime::get_exe_dir().join(
+                        std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.file_name().map(|n| n.to_os_string()))
+                            .unwrap_or_else(|| "yuyubot.exe".into()),
+                    );
+
+                    use std::os::windows::process::CommandExt;
+                    let detached_process = 0x00000008;
+                    let _ = std::process::Command::new(&exe_path)
+                        .arg("--restarted")
+                        .creation_flags(detached_process)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
                 }
             }
             Event::WindowEvent {
@@ -393,6 +398,12 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                             &proxy,
                             &base_url,
                         );
+                    }
+                }
+                UserEvent::CloseWindow(window_id) => {
+                    webviews.remove(&window_id);
+                    if main_window_id == Some(window_id) {
+                        main_window_id = None;
                     }
                 }
                 UserEvent::RestartRequested => {

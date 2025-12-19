@@ -1,7 +1,8 @@
-use super::plugin::{Plugin, PluginManifest, PluginStatus};
+use crate::error::AppResult;
+use crate::plus::plugin::{Plugin, PluginManifest, PluginStatus};
 use crate::runtime;
 use expectrl::{process::Healthcheck, Session};
-use rand::{rngs::OsRng, RngCore};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -178,21 +179,21 @@ impl PluginManager {
             let should_force_kill = now >= force_kill_threshold;
 
             for plugin in &plugin_refs {
-                if plugin.is_process_alive() {
+                if plugin.is_process_alive().await {
                     any_alive = true;
 
                     if should_force_kill {
-                        #[cfg(windows)]
-                        {
-                            let pid = plugin.get_pid();
-                            if pid > 0 {
-                                log_warn!("Force killing plugin process: {}", pid);
-                                use std::os::windows::process::CommandExt;
-                                let _ = std::process::Command::new("taskkill")
-                                    .args(["/PID", &pid.to_string(), "/F", "/T"])
-                                    .creation_flags(0x08000000)
-                                    .output();
-                            }
+                        let pid = plugin.get_pid().await;
+                        if pid > 0 {
+                            log_warn!("Force killing plugin process: {}", pid);
+                            use std::os::windows::process::CommandExt;
+                            let _ = std::process::Command::new("taskkill")
+                                .args(["/PID", &pid.to_string(), "/F", "/T"])
+                                .creation_flags(0x08000000)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .output();
                         }
                     }
                 }
@@ -296,21 +297,17 @@ impl PluginManager {
         self.save_config(&config).await;
     }
 
-    pub async fn load_plugins(&self) -> Result<(), String> {
+    pub async fn load_plugins(&self) -> AppResult<()> {
         let app_dir = self.exe_dir.join("app");
 
         // 检查并创建目录
         if tokio::fs::metadata(&app_dir).await.is_err() {
-            tokio::fs::create_dir_all(&app_dir)
-                .await
-                .map_err(|e| e.to_string())?;
+            tokio::fs::create_dir_all(&app_dir).await?;
             return Ok(());
         }
 
         let mut dir_entries = Vec::new();
-        let mut entries = tokio::fs::read_dir(&app_dir)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut entries = tokio::fs::read_dir(&app_dir).await?;
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.is_dir() {
@@ -335,21 +332,20 @@ impl PluginManager {
         Ok(())
     }
 
-    async fn load_plugin_from_dir(&self, plugin_dir: &Path) -> Result<Plugin, String> {
+    async fn load_plugin_from_dir(&self, plugin_dir: &Path) -> AppResult<Plugin> {
         // 使用文件夹名作为插件唯一ID
         let id = plugin_dir
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or("Invalid plugin directory name")?
+            .ok_or_else(|| {
+                crate::error::AppError::Plugin("Invalid plugin directory name".to_string())
+            })?
             .to_string();
 
         let manifest_path = plugin_dir.join("app.json");
-        let manifest_content = tokio::fs::read_to_string(&manifest_path)
-            .await
-            .map_err(|e| e.to_string())?;
+        let manifest_content = tokio::fs::read_to_string(&manifest_path).await?;
 
-        let manifest: PluginManifest =
-            serde_json::from_str(&manifest_content).map_err(|e| e.to_string())?;
+        let manifest: PluginManifest = serde_json::from_str(&manifest_content)?;
 
         let tmp_dir = self.exe_dir.join("tmp").join("app").join(&id);
 
@@ -412,7 +408,7 @@ impl PluginManager {
         // 设置插件状态为运行中
         plugin.set_status(PluginStatus::Running).await;
         plugin.set_enabled(true).await;
-        plugin.set_process_alive(true);
+        plugin.set_process_alive(true).await;
 
         // 保存启用状态到配置
         self.add_enabled_plugin(plugin_id).await;
@@ -481,11 +477,8 @@ impl PluginManager {
             cmd.env("YUYU_PORT", server_port.to_string());
             cmd.env("YUYU_TOKEN", &plugin_api_token_for_env);
 
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x00000200);
-            }
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x00000200);
 
             // 使用 expectrl 启动会话
             match Session::spawn(cmd) {
@@ -512,48 +505,48 @@ impl PluginManager {
                     loop {
                         // 检查是否应该停止
                         if plugin_clone.should_stop_run(run_id) {
-                            #[cfg(windows)]
-                            {
-                                let pid = session.get_process().pid();
-                                let sent = try_send_ctrl_c(pid);
-                                if sent {
-                                    let deadline = std::time::Instant::now()
-                                        + std::time::Duration::from_secs(5);
-                                    while session.is_alive().unwrap_or(false)
-                                        && std::time::Instant::now() < deadline
-                                    {
-                                        match session.try_read(&mut buf) {
-                                            Ok(0) => break,
-                                            Ok(n) => {
-                                                let bytes = &buf[..n];
-                                                // 去除 ANSI 转义序列
-                                                let stripped = strip_ansi_escapes::strip(bytes);
-                                                let text =
-                                                    String::from_utf8_lossy(&stripped).to_string();
-                                                process_output(
-                                                    &rt_handle,
-                                                    &plugin_clone,
-                                                    &output_sender,
-                                                    &plugin_id_clone,
-                                                    &text,
-                                                );
-                                            }
-                                            Err(ref e)
-                                                if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                                            Err(_) => {}
+                            let pid = session.get_process().pid();
+                            let sent = try_send_ctrl_c(pid);
+                            if sent {
+                                let deadline = std::time::Instant::now()
+                                    + std::time::Duration::from_secs(5);
+                                while session.is_alive().unwrap_or(false)
+                                    && std::time::Instant::now() < deadline
+                                {
+                                    match session.try_read(&mut buf) {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            let bytes = &buf[..n];
+                                            // 去除 ANSI 转义序列
+                                            let stripped = strip_ansi_escapes::strip(bytes);
+                                            let text =
+                                                String::from_utf8_lossy(&stripped).to_string();
+                                            process_output(
+                                                &rt_handle,
+                                                &plugin_clone,
+                                                &output_sender,
+                                                &plugin_id_clone,
+                                                &text,
+                                            );
                                         }
-                                        std::thread::sleep(std::time::Duration::from_millis(100));
+                                        Err(ref e)
+                                            if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                        Err(_) => {}
                                     }
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
                                 }
+                            }
 
-                                if session.is_alive().unwrap_or(false) {
-                                    let pid_str = pid.to_string();
-                                    use std::os::windows::process::CommandExt;
-                                    let _ = std::process::Command::new("taskkill")
-                                        .args(["/PID", pid_str.as_str(), "/F", "/T"])
-                                        .creation_flags(0x08000000)
-                                        .output();
-                                }
+                            if session.is_alive().unwrap_or(false) {
+                                let pid_str = pid.to_string();
+                                use std::os::windows::process::CommandExt;
+                                let _ = std::process::Command::new("taskkill")
+                                    .args(["/PID", pid_str.as_str(), "/F", "/T"])
+                                    .creation_flags(0x08000000)
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .output();
                             }
                             break;
                         }
@@ -561,7 +554,7 @@ impl PluginManager {
                         // 检查进程是否存活
                         if !session.is_alive().unwrap_or(false) {
                             if plugin_clone.is_current_run(run_id) {
-                                plugin_clone.set_process_alive(false);
+                                rt_handle.block_on(plugin_clone.set_process_alive(false));
                             }
                             // 进程已死，尝试读取剩余数据后退出
                             loop {
@@ -591,7 +584,7 @@ impl PluginManager {
                             Ok(0) => {
                                 // EOF
                                 if plugin_clone.is_current_run(run_id) {
-                                    plugin_clone.set_process_alive(false);
+                                    rt_handle.block_on(plugin_clone.set_process_alive(false));
                                 }
                                 break;
                             }
@@ -620,7 +613,7 @@ impl PluginManager {
                                 // 读取错误，可能是进程被杀死
                                 if !session.is_alive().unwrap_or(false) {
                                     if plugin_clone.is_current_run(run_id) {
-                                        plugin_clone.set_process_alive(false);
+                                        rt_handle.block_on(plugin_clone.set_process_alive(false));
                                     }
                                     break;
                                 }
@@ -637,7 +630,7 @@ impl PluginManager {
                                     line: err_msg,
                                 });
                                 if plugin_clone.is_current_run(run_id) {
-                                    plugin_clone.set_process_alive(false);
+                                    rt_handle.block_on(plugin_clone.set_process_alive(false));
                                 }
                                 break;
                             }
@@ -654,7 +647,7 @@ impl PluginManager {
                     // 只有在清理工作完成后，才将进程标记为死亡
                     // 这样可以避免 stop_all_plugins_and_wait 提前返回，导致 cleanup_tmp_apps 发生竞争
                     if plugin_clone.is_current_run(run_id) {
-                        plugin_clone.set_process_alive(false);
+                        rt_handle.block_on(plugin_clone.set_process_alive(false));
                     }
 
                     {
@@ -691,19 +684,6 @@ impl PluginManager {
                     }
                 }
                 Err(e) => {
-                    #[cfg(windows)]
-                    let mut _job_handle = None;
-
-                    // 启动失败，保持 enabled = true（用户可能想重试）
-                    // 移除这里的 set_process_alive(false)，移到后面清理完之后
-
-                    #[cfg(windows)]
-                    {
-                        if let Some(h) = _job_handle.take() {
-                            unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };
-                        }
-                    }
-
                     // 清理 tmp 目录
                     if run_tmp_dir.exists() {
                         let _ = std::fs::remove_dir_all(&run_tmp_dir);
@@ -712,7 +692,7 @@ impl PluginManager {
                     // 启动失败，保持 enabled = true（用户可能想重试）
                     // 同样要等到清理完成后才标记
                     if plugin_clone.is_current_run(run_id) {
-                        plugin_clone.set_process_alive(false);
+                        rt_handle.block_on(plugin_clone.set_process_alive(false));
                     }
 
                     let err_msg = format!("[错误] 启动插件失败: {}", e);
@@ -892,18 +872,14 @@ impl PluginManager {
         &self,
         plugin_id: &str,
         webui: String,
-        port: u16,
     ) -> Result<(), String> {
-        if port == 0 {
-            return Err("Invalid port".to_string());
-        }
         let plugins = self.plugins.read().await;
         let plugin = plugins
             .get(plugin_id)
             .ok_or("Plugin not found".to_string())?
             .clone();
         drop(plugins);
-        plugin.set_webui(webui, port).await;
+        plugin.set_webui(webui).await;
         let status = plugin.get_status().await;
         let enabled = plugin.is_enabled().await;
         let webui_url = plugin.get_webui_url().await;
@@ -913,6 +889,36 @@ impl PluginManager {
             enabled,
             webui_url,
         });
+        Ok(())
+    }
+
+    pub async fn open_plugin_dir(&self, plugin_id: &str) -> Result<(), String> {
+        let plugins = self.plugins.read().await;
+        let plugin = plugins
+            .get(plugin_id)
+            .ok_or("Plugin not found".to_string())?
+            .clone();
+        drop(plugins);
+
+        let path = plugin.plugin_dir.clone();
+
+        runtime::open_in_explorer(&path);
+        Ok(())
+    }
+
+    pub async fn open_plugin_data_dir(&self, plugin_id: &str) -> Result<(), String> {
+        let data_dir = self.exe_dir.join("data").join(plugin_id);
+        let _ = tokio::fs::create_dir_all(&data_dir).await;
+
+        runtime::open_in_explorer(&data_dir);
+        Ok(())
+    }
+
+    pub async fn open_plugins_root(&self) -> Result<(), String> {
+        let plugins_root = self.exe_dir.join("app");
+        let _ = tokio::fs::create_dir_all(&plugins_root).await;
+
+        runtime::open_in_explorer(&plugins_root);
         Ok(())
     }
 }
@@ -956,7 +962,7 @@ pub struct PluginInfo {
 
 fn generate_plugin_api_token() -> String {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     let mut token = String::with_capacity(64);
     for b in bytes {
         let _ = write!(&mut token, "{:02x}", b);
@@ -966,7 +972,7 @@ fn generate_plugin_api_token() -> String {
 
 fn generate_tmp_run_suffix() -> String {
     let mut bytes = [0u8; 8];
-    OsRng.fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     let mut out = String::with_capacity(16);
     for b in bytes {
         let _ = write!(&mut out, "{:02x}", b);
@@ -1006,10 +1012,10 @@ async fn wait_tcp_ready(host: &str, port: u16, timeout: std::time::Duration) -> 
     }
 }
 
-#[cfg(windows)]
 fn try_send_ctrl_c(pid: u32) -> bool {
     use windows_sys::Win32::System::Console::{
-        AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler, CTRL_C_EVENT,
+        AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+        SetStdHandle, CTRL_C_EVENT, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
 
     unsafe {
@@ -1028,6 +1034,12 @@ fn try_send_ctrl_c(pid: u32) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let _ = FreeConsole();
         let _ = SetConsoleCtrlHandler(None, 0);
+
+        // 重新将标准句柄设为 NULL，恢复 GUI 状态
+        // 避免因 FreeConsole 导致的句柄无效问题
+        SetStdHandle(STD_INPUT_HANDLE, std::ptr::null_mut());
+        SetStdHandle(STD_OUTPUT_HANDLE, std::ptr::null_mut());
+        SetStdHandle(STD_ERROR_HANDLE, std::ptr::null_mut());
 
         ok
     }

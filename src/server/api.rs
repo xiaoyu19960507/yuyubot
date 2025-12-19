@@ -1,5 +1,6 @@
 use crate::logger;
 use crate::plus::PluginManager;
+use crate::runtime;
 use crate::server::MainProxy;
 use crate::window::UserEvent;
 use rfd;
@@ -13,7 +14,6 @@ use rocket::{
     Request, State,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +34,7 @@ pub struct LogsResponse {
 pub struct SystemInfo {
     pub port: AtomicU16,
     pub data_dir: String,
+    pub plugins_root: String,
 }
 
 #[derive(Serialize)]
@@ -78,19 +79,18 @@ impl<'r> FromRequest<'r> for PluginCaller {
 }
 
 #[derive(Deserialize)]
-pub struct SetWebuiPortRequest {
+pub struct SetWebuiRequest {
     pub webui: String,
-    pub port: u16,
 }
 
-#[post("/set_webui_port", format = "json", data = "<req_body>")]
-pub async fn set_webui_port(
+#[post("/set_webui", format = "json", data = "<req_body>")]
+pub async fn set_webui(
     caller: PluginCaller,
-    req_body: Json<SetWebuiPortRequest>,
+    req_body: Json<SetWebuiRequest>,
     manager: &State<Arc<PluginManager>>,
 ) -> Json<ApiResponse<String>> {
     match manager
-        .set_plugin_webui(&caller.plugin_id, req_body.webui.clone(), req_body.port)
+        .set_plugin_webui(&caller.plugin_id, req_body.webui.clone())
         .await
     {
         Ok(_) => Json(ApiResponse {
@@ -98,18 +98,15 @@ pub async fn set_webui_port(
             data: "ok".to_string(),
         }),
         Err(e) => Json(ApiResponse {
-            retcode: 1,
-            data: e,
+            retcode: -1,
+            data: e.to_string(),
         }),
     }
 }
 
 #[get("/ui/state")]
 pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     let config_file = exe_dir.join("config").join("ui.json");
 
@@ -132,10 +129,7 @@ pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
 #[post("/ui/state", format = "json", data = "<state>")]
 pub async fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
     let state_inner = state.into_inner();
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("ui.json");
@@ -241,6 +235,7 @@ pub fn get_system_info(
     let info = SystemInfoResponse {
         port: system_info.port.load(Ordering::SeqCst),
         data_dir: system_info.data_dir.clone(),
+        plugins_root: system_info.plugins_root.clone(),
     };
     Json(ApiResponse {
         retcode: 0,
@@ -252,28 +247,39 @@ pub fn get_system_info(
 pub struct SystemInfoResponse {
     pub port: u16,
     pub data_dir: String,
+    #[serde(rename = "plugins_root")]
+    pub plugins_root: String,
 }
 
 #[post("/open_data_dir")]
 pub async fn open_data_dir(system_info: &State<Arc<SystemInfo>>) -> Json<ApiResponse<String>> {
     let path = system_info.data_dir.clone();
 
+    
     let _ = tokio::fs::create_dir_all(&path).await;
 
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer").arg(&path).spawn();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Fallback for other OS or just do nothing as original code implied windows behavior
-        let _ = std::process::Command::new("explorer").arg(&path).spawn();
-    }
+    runtime::open_in_explorer(&path);
 
     Json(ApiResponse {
         retcode: 0,
         data: "Opening directory".to_string(),
     })
+}
+
+#[post("/open_plugins_dir")]
+pub async fn open_plugins_dir(
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    match manager.open_plugins_root().await {
+        Ok(_) => Json(ApiResponse {
+            retcode: 0,
+            data: "Opening directory".to_string(),
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
+    }
 }
 
 #[post("/restart_program")]
@@ -379,10 +385,7 @@ pub fn load_bot_config_from_disk(exe_dir: &std::path::Path) -> BotConfig {
 
 #[get("/bot/get_config")]
 pub async fn get_bot_config() -> Json<ApiResponse<BotConfig>> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     let config_file = exe_dir.join("config").join("config.json");
 
@@ -497,10 +500,7 @@ pub async fn save_bot_config(
         }
     };
 
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("config.json");
@@ -645,10 +645,7 @@ pub async fn get_login_info(
     _bot_state: &State<Arc<crate::server::BotConnectionState>>,
     _body: Json<serde_json::Value>,
 ) -> Json<ApiResponse<LoginInfo>> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = runtime::get_exe_dir();
 
     let config_file = exe_dir.join("config").join("config.json");
 
@@ -713,10 +710,7 @@ pub async fn get_login_info(
 
 pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionState>) {
     let config_result = tokio::task::spawn_blocking(|| {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("."));
+        let exe_dir = runtime::get_exe_dir();
 
         let config_file = exe_dir.join("config").join("config.json");
 
@@ -761,10 +755,7 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
 
 async fn update_auto_connect_status(auto_connect: bool) {
     let _ = tokio::task::spawn_blocking(move || {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("."));
+        let exe_dir = runtime::get_exe_dir();
 
         let config_file = exe_dir.join("config").join("config.json");
 
@@ -1057,6 +1048,40 @@ pub async fn clear_plugin_output(
                 data: format!("Failed to clear output: {}", e),
             })
         }
+    }
+}
+
+#[post("/plugins/<plugin_id>/open_dir")]
+pub async fn open_plugin_dir(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    match manager.open_plugin_dir(&plugin_id).await {
+        Ok(_) => Json(ApiResponse {
+            retcode: 0,
+            data: "Opening directory".to_string(),
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
+    }
+}
+
+#[post("/plugins/<plugin_id>/open_data_dir")]
+pub async fn open_plugin_data_dir(
+    plugin_id: String,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    match manager.open_plugin_data_dir(&plugin_id).await {
+        Ok(_) => Json(ApiResponse {
+            retcode: 0,
+            data: "Opening directory".to_string(),
+        }),
+        Err(e) => Json(ApiResponse {
+            retcode: 1,
+            data: e,
+        }),
     }
 }
 

@@ -56,3 +56,27 @@ where
 {
     get_runtime().spawn(future)
 }
+
+/// 获取可执行文件所在的目录
+pub fn get_exe_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// 在文件资源管理器中打开指定路径
+pub fn open_in_explorer<P: AsRef<std::path::Path>>(path: P) {
+    let path = path.as_ref();
+    let mut cmd = std::process::Command::new("explorer");
+    cmd.arg(path);
+
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+
+    let rsp = cmd.spawn();
+    if let Err(e) = rsp {
+        log_error!("Failed to open explorer: {},{}", path.display(), e);
+    }
+}

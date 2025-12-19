@@ -8,37 +8,36 @@ tao = "0.34.5"
 wry = "0.53.5"
 http = "1.4.0"
 rocket = { version = "0.5.1", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util"] }
-once_cell = "1.19"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync", "time", "net", "io-util"] }
+once_cell = "1.21.3"
 
-url = "2.4"
+url = "2.5.7"
 
 expectrl = "0.8.0"
-rust-embed = "8"
+rust-embed = "8.9.0"
 
-image = "0.24"
+image = "0.25.9"
 tray-icon = "0.21.2"
 
 
-tracing = "0.1"
-# tracing-subscriber = { version = "0.3", features = ["fmt", "ansi"] }
-chrono = "0.4"
-lazy_static = "1.4"
-reqwest = { version = "0.11", features = ["stream"] }
-futures-util = "0.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "env-filter"] }
+chrono = "0.4.42"
+lazy_static = "1.5.0"
+reqwest = { version = "0.12.26", features = ["stream"] }
+futures-util = "0.3.31"
 ws = { package = "rocket_ws", version = "0.1.1" }
-rfd = "0.14"
-rand = "0.8"
+rfd = "0.16.0"
+rand = "0.9.0"
 sevenz-rust2 = {"git" = "https://github.com/super1207/sevenz-rust2"}
 strip-ansi-escapes = "0.2.1"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_System_Console"] }
+thiserror = "2.0.17"
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 
 [build-dependencies]
-winres = "0.1"
+winres = "0.1.12"
 
 
 #[profile.release]
