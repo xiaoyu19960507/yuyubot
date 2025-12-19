@@ -112,11 +112,11 @@ pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
 
     let state = if let Ok(content) = tokio::fs::read_to_string(&config_file).await {
         serde_json::from_str::<UiState>(&content).unwrap_or(UiState {
-            last_page: "logs".to_string(),
+            last_page: "plugins".to_string(),
         })
     } else {
         UiState {
-            last_page: "logs".to_string(),
+            last_page: "plugins".to_string(),
         }
     };
 

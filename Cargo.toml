@@ -40,9 +40,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 winres = "0.1.12"
 
 
-#[profile.release]
-#panic = "abort" # Strip expensive panic clean-up logic
-#codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-#lto = true # Enables link to optimizations
-#opt-level = "s" # Optimize for binary size
-#strip = true # Remove debug symbols
+[profile.release]
+panic = "abort" # Strip expensive panic clean-up logic
+codegen-units = 1 # Compile crates one after another so the compiler can optimize better
+lto = true # Enables link to optimizations
+opt-level = "s" # Optimize for binary size
+strip = true # Remove debug symbols

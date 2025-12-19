@@ -352,7 +352,7 @@ const { createApp, ref, onMounted, watch } = Vue;
 const app = createApp({
   setup() {
     const isDark = ref(false);
-    const currentPage = ref('logs');
+    const currentPage = ref('plugins');
     const transitionName = ref('slide-up');
     const toasts = ref([]);
     let toastId = 0;
@@ -470,7 +470,7 @@ const app = createApp({
       transitionName.value = newIndex > oldIndex ? 'slide-up' : 'slide-down';
       
       // 保存页面状态
-      fetch('/api/ui/save_state', {
+      fetch('/api/ui/state', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -479,6 +479,7 @@ const app = createApp({
       }).catch(e => console.error("Failed to save ui state", e));
     });
 
+    // 连接全局状态SSE
     onMounted(async () => {
       if (localStorage.getItem('theme') === 'dark') {
         isDark.value = true;
@@ -500,14 +501,6 @@ const app = createApp({
       connectGlobalStatusSSE();
     });
     
-    // 监听页面变化，保存到后端
-    watch(currentPage, (newVal) => {
-      fetch('/api/ui/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ last_page: newVal })
-      }).catch(console.error);
-    });
     return {
       isDark,
       userAvatar,
