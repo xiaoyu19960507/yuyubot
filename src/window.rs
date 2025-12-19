@@ -79,8 +79,9 @@ fn create_window_with_url(
     proxy: &EventLoopProxy<UserEvent>,
     url: &str,
 ) {
+    let version = env!("CARGO_PKG_VERSION");
     let window_res = WindowBuilder::new()
-        .with_title("加载中...")
+        .with_title(format!("羽羽BOT v{} - 加载中...", version))
         .with_inner_size(LogicalSize::new(1024.0, 768.0))
         .with_window_icon(load_window_icon())
         .with_visible(false)
@@ -156,8 +157,9 @@ fn show_or_create_main_window(
         }
     }
 
+    let version = env!("CARGO_PKG_VERSION");
     let window_res = WindowBuilder::new()
-        .with_title("加载中...")
+        .with_title(format!("羽羽BOT v{} - 加载中...", version))
         .with_inner_size(LogicalSize::new(1024.0, 768.0))
         .with_window_icon(load_window_icon())
         .with_visible(false)
@@ -368,7 +370,8 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
             Event::UserEvent(user_event) => match user_event {
                 UserEvent::TitleChanged(window_id, title) => {
                     if let Some((window, _)) = webviews.get(&window_id) {
-                        window.set_title(&title);
+                        let version = env!("CARGO_PKG_VERSION");
+                        window.set_title(&format!("{} v{}", title, version));
                     }
                 }
                 UserEvent::TrayIconEvent(TrayIconEvent::Click {
