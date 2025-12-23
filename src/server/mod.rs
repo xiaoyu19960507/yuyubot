@@ -30,7 +30,6 @@ pub struct BotConnectionState {
     pub is_connecting: AtomicBool,
     pub should_connect: AtomicBool,
     pub status_sender: broadcast::Sender<api::BotStatusResponse>,
-    pub connection_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[cfg(debug_assertions)]
@@ -134,7 +133,6 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 is_connecting: AtomicBool::new(false),
                 should_connect: AtomicBool::new(false),
                 status_sender,
-                connection_task: tokio::sync::Mutex::new(None),
             });
 
             let bot_config_state = Arc::new(RwLock::new(api::load_bot_config_from_disk(&exe_dir)));
