@@ -41,6 +41,7 @@ fn create_webview(
     window: &Window,
     proxy: EventLoopProxy<UserEvent>,
     url: &str,
+    web_context: &mut wry::WebContext,
 ) -> wry::Result<wry::WebView> {
     let window_id = window.id();
     let proxy_for_title = proxy.clone();
@@ -48,7 +49,7 @@ fn create_webview(
     let proxy_for_ipc = proxy.clone();
     let window_id_for_ipc = window_id;
 
-    WebViewBuilder::new()
+    WebViewBuilder::new_with_web_context(web_context)
         .with_url(url)
         .with_initialization_script(r#"
             window.close = function() {
@@ -62,7 +63,7 @@ fn create_webview(
             let _ = proxy_for_new_window.send_event(UserEvent::NewWindowRequested(request_url));
             NewWindowResponse::Deny
         })
-        .with_ipc_handler(move |request| {
+        .with_ipc_handler(move |request: http::Request<String>| {
             let msg = request.body();
             if msg == "drag_window" {
                 let _ = proxy_for_ipc.send_event(UserEvent::StartDrag(window_id_for_ipc));
@@ -78,6 +79,7 @@ fn create_window_with_url(
     target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
     proxy: &EventLoopProxy<UserEvent>,
     url: &str,
+    web_context: &mut wry::WebContext,
 ) {
     let version = env!("CARGO_PKG_VERSION");
     let window_res = WindowBuilder::new()
@@ -124,7 +126,7 @@ fn create_window_with_url(
     new_window.set_always_on_top(false);
 
     let window_id = new_window.id();
-    match create_webview(&new_window, proxy.clone(), url) {
+    match create_webview(&new_window, proxy.clone(), url, web_context) {
         Ok(webview) => {
             webviews.insert(window_id, (new_window, webview));
         }
@@ -142,6 +144,7 @@ fn show_or_create_main_window(
     target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
     proxy: &EventLoopProxy<UserEvent>,
     base_url: &str,
+    web_context: &mut wry::WebContext,
 ) {
     if let Some(id) = *main_window_id {
         if let Some((window, _)) = webviews.get(&id) {
@@ -201,7 +204,7 @@ fn show_or_create_main_window(
     new_window.set_always_on_top(false);
 
     let window_id = new_window.id();
-    match create_webview(&new_window, proxy.clone(), base_url) {
+    match create_webview(&new_window, proxy.clone(), base_url, web_context) {
         Ok(webview) => {
             *main_window_id = Some(window_id);
             webviews.insert(window_id, (new_window, webview));
@@ -265,6 +268,11 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
     let mut initial_window_created = false;
     let mut is_restarting = false;
 
+    // 初始化 WebContext
+    let data_dir = runtime::get_exe_dir().join("config").join("web_data");
+    let _ = std::fs::create_dir_all(&data_dir);
+    let mut web_context = wry::WebContext::new(Some(data_dir));
+
     // 托盘菜单
     let show_item = MenuItem::new("显示窗口", true, None);
     let restart_item = MenuItem::new("重启程序", true, None);
@@ -320,6 +328,7 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                 event_loop_window_target,
                 &proxy,
                 &base_url,
+                &mut web_context,
             );
             initial_window_created = true;
         }
@@ -385,6 +394,7 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                         event_loop_window_target,
                         &proxy,
                         &base_url,
+                        &mut web_context,
                     );
                 }
                 UserEvent::MenuEvent(menu_event) => {
@@ -400,6 +410,7 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                             event_loop_window_target,
                             &proxy,
                             &base_url,
+                            &mut web_context,
                         );
                     }
                 }
@@ -414,7 +425,13 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                     *control_flow = ControlFlow::Exit;
                 }
                 UserEvent::NewWindowRequested(url) => {
-                    create_window_with_url(&mut webviews, event_loop_window_target, &proxy, &url);
+                    create_window_with_url(
+                        &mut webviews,
+                        event_loop_window_target,
+                        &proxy,
+                        &url,
+                        &mut web_context,
+                    );
                 }
                 UserEvent::StartDrag(window_id) => {
                     if let Some((window, _)) = webviews.get(&window_id) {
