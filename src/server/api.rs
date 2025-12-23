@@ -529,6 +529,10 @@ pub async fn save_bot_config(
     let sse_url = config_inner.get_event_url();
     let bot_state_clone = bot_state.inner().clone();
 
+    if let Some(handle) = bot_state_clone.connection_task.lock().await.take() {
+        handle.abort();
+    }
+
     bot_state_clone
         .should_connect
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -543,9 +547,11 @@ pub async fn save_bot_config(
     };
     let _ = bot_state_clone.status_sender.send(status);
 
-    tokio::spawn(async move {
-        connect_bot_sse(&sse_url, token, bot_state_clone).await;
+    let bot_state_for_task = bot_state_clone.clone();
+    let handle = tokio::spawn(async move {
+        connect_bot_sse(&sse_url, token, bot_state_for_task).await;
     });
+    *bot_state_clone.connection_task.lock().await = Some(handle);
 
     Json(ApiResponse {
         retcode: 0,
@@ -567,6 +573,10 @@ pub async fn disconnect_bot(
     bot_state
         .should_connect
         .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    if let Some(handle) = bot_state.connection_task.lock().await.take() {
+        handle.abort();
+    }
 
     // 更新配置文件，设置auto_connect为false
     update_auto_connect_status(false).await;
@@ -745,11 +755,16 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
         // 启动连接
         let token = config.token.clone();
         let sse_url = config.get_event_url();
-        let bot_state_clone = bot_state.clone();
 
-        tokio::spawn(async move {
-            connect_bot_sse(&sse_url, token, bot_state_clone).await;
+        if let Some(handle) = bot_state.connection_task.lock().await.take() {
+            handle.abort();
+        }
+
+        let bot_state_for_task = bot_state.clone();
+        let handle = tokio::spawn(async move {
+            connect_bot_sse(&sse_url, token, bot_state_for_task).await;
         });
+        *bot_state.connection_task.lock().await = Some(handle);
     }
 }
 
