@@ -42,12 +42,6 @@ pub struct AppInfo {
     pub version: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
-pub struct UiState {
-    #[serde(default)]
-    pub last_page: String,
-}
-
 pub struct PluginCaller {
     pub plugin_id: String,
 }
@@ -100,63 +94,6 @@ pub async fn set_webui(
         Err(e) => Json(ApiResponse {
             retcode: -1,
             data: e.to_string(),
-        }),
-    }
-}
-
-#[get("/ui/state")]
-pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
-    let exe_dir = runtime::get_exe_dir();
-
-    let config_file = exe_dir.join("config").join("ui.json");
-
-    let state = if let Ok(content) = tokio::fs::read_to_string(&config_file).await {
-        serde_json::from_str::<UiState>(&content).unwrap_or(UiState {
-            last_page: "plugins".to_string(),
-        })
-    } else {
-        UiState {
-            last_page: "plugins".to_string(),
-        }
-    };
-
-    Json(ApiResponse {
-        retcode: 0,
-        data: state,
-    })
-}
-
-#[post("/ui/state", format = "json", data = "<state>")]
-pub async fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
-    let state_inner = state.into_inner();
-    let exe_dir = runtime::get_exe_dir();
-
-    let config_dir = exe_dir.join("config");
-    let config_file = config_dir.join("ui.json");
-
-    if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
-        return Json(ApiResponse {
-            retcode: 1,
-            data: format!("Failed to create config directory: {}", e),
-        });
-    }
-
-    match serde_json::to_string_pretty(&state_inner) {
-        Ok(json_str) => {
-            if let Err(e) = tokio::fs::write(&config_file, json_str).await {
-                return Json(ApiResponse {
-                    retcode: 1,
-                    data: format!("Failed to write ui config: {}", e),
-                });
-            }
-            Json(ApiResponse {
-                retcode: 0,
-                data: "UI state saved".to_string(),
-            })
-        }
-        Err(e) => Json(ApiResponse {
-            retcode: 1,
-            data: format!("Failed to serialize ui state: {}", e),
         }),
     }
 }

@@ -470,13 +470,7 @@ const app = createApp({
       transitionName.value = newIndex > oldIndex ? 'slide-up' : 'slide-down';
       
       // 保存页面状态
-      fetch('/api/ui/state', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ last_page: newVal })
-      }).catch(e => console.error("Failed to save ui state", e));
+      localStorage.setItem('last_page', newVal);
     });
 
     // 连接全局状态SSE
@@ -486,17 +480,11 @@ const app = createApp({
         document.documentElement.setAttribute('data-theme', 'dark');
       }
       // 恢复上次访问的页面
-      try {
-        const response = await fetch('/api/ui/state');
-        const result = await response.json();
-        if (result.retcode === 0 && result.data.last_page) {
-          if (navItems.some(item => item.id === result.data.last_page)) {
-            currentPage.value = result.data.last_page;
-          }
-        }
-      } catch (e) {
-        console.error("Failed to load ui state", e);
+      const lastPage = localStorage.getItem('last_page');
+      if (lastPage && navItems.some(item => item.id === lastPage)) {
+        currentPage.value = lastPage;
       }
+      
       // 连接全局状态SSE
       connectGlobalStatusSSE();
     });
