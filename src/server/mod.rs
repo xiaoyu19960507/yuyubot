@@ -187,6 +187,8 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                         api::plugin_output_stream,
                         api::plugins_status_stream,
                         api::plugins_events_stream,
+                        api::get_ui_state,
+                        api::save_ui_state
                     ],
                 )
                 .attach(AdHoc::on_liftoff("Get Port", move |rocket| {
