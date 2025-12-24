@@ -244,7 +244,7 @@ async fn proxy_api(
     })
 }
 
-#[get("/event", rank = 1, format = "text/event-stream")]
+#[get("/event", rank = 2, format = "text/event-stream")]
 fn event_stream(
     _auth: PluginAuth,
     proxy: &State<Arc<MilkyEventProxy>>,
@@ -272,7 +272,7 @@ fn event_stream(
     }
 }
 
-#[get("/event", rank = 2)]
+#[get("/event", rank = 1)]
 fn event_ws(
     ws: rocket_ws::WebSocket,
     _auth: PluginAuth,
@@ -320,6 +320,10 @@ fn event_ws(
                             Err(_) => break,
                         }
                     }
+                }
+
+                if inbound_closed {
+                    break;
                 }
             }
 
@@ -441,6 +445,11 @@ fn extract_access_token(req: &Request<'_>) -> String {
 
     for pair in query.split('&') {
         if let Some(v) = pair.strip_prefix("access_token=") {
+            if !v.is_empty() {
+                return v.to_string();
+            }
+        }
+        if let Some(v) = pair.strip_prefix("token=") {
             if !v.is_empty() {
                 return v.to_string();
             }
