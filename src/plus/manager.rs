@@ -548,7 +548,6 @@ impl PluginManager {
                                     .stderr(std::process::Stdio::null())
                                     .output();
                             }
-                            break;
                         }
 
                         // 检查进程是否存活
