@@ -412,3 +412,5 @@ cargo build --release
 - Windows 10/11
 
 - WebView2
+
+- VC++ 14 Runtime 
