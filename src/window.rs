@@ -8,6 +8,8 @@ use tao::{
     event_loop::EventLoopProxy,
     window::{Window, WindowBuilder, WindowId},
 };
+use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
@@ -26,6 +28,7 @@ pub enum UserEvent {
     StartDrag(WindowId),
     CloseWindow(WindowId),
     RestartRequested,
+    ActivateExisting,
 }
 
 fn show_error_dialog(title: &str, message: &str) {
@@ -35,6 +38,20 @@ fn show_error_dialog(title: &str, message: &str) {
         .set_level(MessageLevel::Error)
         .set_buttons(MessageButtons::Ok)
         .show();
+}
+
+fn spawn_activation_listener(proxy: EventLoopProxy<UserEvent>, event_handle: usize) {
+    std::thread::spawn(move || {
+        let event_handle = event_handle as HANDLE;
+        loop {
+            let wait_result = unsafe { WaitForSingleObject(event_handle, u32::MAX) };
+            if wait_result == WAIT_OBJECT_0 {
+                let _ = proxy.send_event(UserEvent::ActivateExisting);
+            } else {
+                break;
+            }
+        }
+    });
 }
 
 fn create_webview(
@@ -250,12 +267,14 @@ use crate::runtime;
 use crate::server::ServerState;
 use std::sync::Arc;
 
-pub fn run_app(port: u16, server_state: Arc<ServerState>) {
+pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle: usize) {
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     let base_url = format!("http://127.0.0.1:{}", port);
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+
+    spawn_activation_listener(proxy.clone(), activate_event_handle);
 
     // 设置全局代理
     {
@@ -423,6 +442,16 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>) {
                 UserEvent::RestartRequested => {
                     is_restarting = true;
                     *control_flow = ControlFlow::Exit;
+                }
+                UserEvent::ActivateExisting => {
+                    show_or_create_main_window(
+                        &mut webviews,
+                        &mut main_window_id,
+                        event_loop_window_target,
+                        &proxy,
+                        &base_url,
+                        &mut web_context,
+                    );
                 }
                 UserEvent::NewWindowRequested(url) => {
                     create_window_with_url(

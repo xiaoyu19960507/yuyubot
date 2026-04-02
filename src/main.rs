@@ -9,6 +9,11 @@ mod server;
 mod window;
 
 use rust_embed::Embed;
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+use windows_sys::Win32::System::Threading::{CreateMutexW, CreateEventW, SetEvent};
 
 #[derive(Embed)]
 #[folder = "res/"]
@@ -31,8 +36,93 @@ mod windows_console {
     }
 }
 
+struct SingleInstanceGuard {
+    mutex_handle: usize,
+    activate_event_handle: usize,
+}
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if self.activate_event_handle != 0 {
+            unsafe { CloseHandle(self.activate_event_handle as HANDLE) };
+        }
+        if self.mutex_handle != 0 {
+            unsafe { CloseHandle(self.mutex_handle as HANDLE) };
+        }
+    }
+}
+
+fn fnv1a_hash(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in input.bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn acquire_single_instance_or_exit() -> Result<SingleInstanceGuard, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("获取当前可执行文件路径失败: {}", e))?;
+    let exe_path_norm = exe_path
+        .to_string_lossy()
+        .to_lowercase();
+    let hash = fnv1a_hash(&exe_path_norm);
+
+    let mutex_name = format!("Global\\yuyubot_single_instance_mutex_{:016x}", hash);
+    let event_name = format!("Global\\yuyubot_single_instance_activate_{:016x}", hash);
+
+    let mutex_name_wide: Vec<u16> = OsStr::new(&mutex_name)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let event_name_wide: Vec<u16> = OsStr::new(&event_name)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let mutex_handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, mutex_name_wide.as_ptr()) };
+    if mutex_handle.is_null() {
+        let err_code = unsafe { GetLastError() };
+        return Err(format!("CreateMutexW 失败: {}", err_code));
+    }
+
+    let event_handle = unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, event_name_wide.as_ptr()) };
+    if event_handle.is_null() {
+        unsafe { CloseHandle(mutex_handle) };
+        let err_code = unsafe { GetLastError() };
+        return Err(format!("CreateEventW 失败: {}", err_code));
+    }
+
+    let duplicated = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if duplicated {
+        // 触发激活事件，让主进程窗口聚焦
+        unsafe {
+            SetEvent(event_handle);
+            CloseHandle(event_handle);
+            CloseHandle(mutex_handle);
+        }
+        return Err("已存在正在运行的程序实例".into());
+    }
+
+    Ok(SingleInstanceGuard {
+        mutex_handle: mutex_handle as usize,
+        activate_event_handle: event_handle as usize,
+    })
+}
+
 fn main() {
     logger::init_logger();
+
+    let single_instance_guard = match acquire_single_instance_or_exit() {
+        Ok(g) => g,
+        Err(err_msg) => {
+            log_warn!("{}", err_msg);
+            // 已有实例正在运行；直接退出即可，已有实例会收到激活事件并聚焦窗口。
+            return;
+        }
+    };
 
     // 如果是重启启动的，重新分配一个隐藏的控制台，以支持 expectrl/pty
     if std::env::args().any(|arg| arg == "--restarted") {
@@ -61,5 +151,5 @@ fn main() {
 
     // 将清理逻辑移入 run_app 中，通过回调或者其他方式触发
     // 或者，由于 run_app 是阻塞的，我们需要确保它在退出时执行清理
-    window::run_app(port, server_state);
+    window::run_app(port, server_state, single_instance_guard.activate_event_handle);
 }
