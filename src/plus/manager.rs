@@ -602,6 +602,7 @@ impl PluginManager {
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 // 超时，继续循环检查进程状态
+                                std::thread::sleep(std::time::Duration::from_millis(30));
                                 continue;
                             }
                             Err(e) => {
