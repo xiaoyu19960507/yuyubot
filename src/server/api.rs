@@ -529,6 +529,9 @@ pub async fn save_bot_config(
     let sse_url = config_inner.get_event_url();
     let bot_state_clone = bot_state.inner().clone();
 
+    if let Some(cancel) = bot_state_clone.cancel_sender.lock().await.take() {
+        let _ = cancel.send(());
+    }
     if let Some(handle) = bot_state_clone.connection_task.lock().await.take() {
         handle.abort();
     }
@@ -548,8 +551,11 @@ pub async fn save_bot_config(
     let _ = bot_state_clone.status_sender.send(status);
 
     let bot_state_for_task = bot_state_clone.clone();
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    *bot_state_clone.cancel_sender.lock().await = Some(cancel_tx);
+
     let handle = tokio::spawn(async move {
-        connect_bot_sse(&sse_url, token, bot_state_for_task).await;
+        connect_bot_sse(&sse_url, token, bot_state_for_task, cancel_rx).await;
     });
     *bot_state_clone.connection_task.lock().await = Some(handle);
 
@@ -574,8 +580,16 @@ pub async fn disconnect_bot(
         .should_connect
         .store(false, std::sync::atomic::Ordering::SeqCst);
 
+    if let Some(cancel) = bot_state.cancel_sender.lock().await.take() {
+        log_info!("发送取消信号...");
+        let _ = cancel.send(());
+    }
+
+    // 等待任务自然结束，不使用 abort
     if let Some(handle) = bot_state.connection_task.lock().await.take() {
-        handle.abort();
+        log_info!("等待连接任务结束...");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        log_info!("连接任务已结束");
     }
 
     // 更新配置文件，设置auto_connect为false
@@ -756,13 +770,19 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
         let token = config.token.clone();
         let sse_url = config.get_event_url();
 
+        if let Some(cancel) = bot_state.cancel_sender.lock().await.take() {
+            let _ = cancel.send(());
+        }
         if let Some(handle) = bot_state.connection_task.lock().await.take() {
             handle.abort();
         }
 
         let bot_state_for_task = bot_state.clone();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        *bot_state.cancel_sender.lock().await = Some(cancel_tx);
+
         let handle = tokio::spawn(async move {
-            connect_bot_sse(&sse_url, token, bot_state_for_task).await;
+            connect_bot_sse(&sse_url, token, bot_state_for_task, cancel_rx).await;
         });
         *bot_state.connection_task.lock().await = Some(handle);
     }
@@ -793,6 +813,7 @@ async fn connect_bot_sse(
     sse_url: &str,
     token: Option<String>,
     bot_state: Arc<crate::server::BotConnectionState>,
+    mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     loop {
         // 检查是否应该继续连接
@@ -837,7 +858,9 @@ async fn connect_bot_sse(
                     };
                     let _ = bot_state.status_sender.send(status);
 
-                    let _ = handle_bot_sse_stream(response, bot_state.clone()).await;
+                    let _ = handle_bot_sse_stream(response, bot_state.clone(), &mut cancel_rx).await;
+
+                    log_info!("SSE 流处理结束");
 
                     bot_state
                         .is_connected
@@ -911,6 +934,7 @@ async fn connect_bot_sse(
 async fn handle_bot_sse_stream(
     response: reqwest::Response,
     bot_state: Arc<crate::server::BotConnectionState>,
+    cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use futures_util::StreamExt;
 
@@ -918,6 +942,10 @@ async fn handle_bot_sse_stream(
 
     loop {
         tokio::select! {
+            _ = &mut *cancel_rx => {
+                log_info!("收到取消信号，退出 SSE 流");
+                break;
+            }
             chunk = stream.next() => {
                 match chunk {
                     Some(Ok(bytes)) => {

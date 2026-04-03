@@ -151,5 +151,10 @@ fn main() {
 
     // 将清理逻辑移入 run_app 中，通过回调或者其他方式触发
     // 或者，由于 run_app 是阻塞的，我们需要确保它在退出时执行清理
-    window::run_app(port, server_state, single_instance_guard.activate_event_handle);
+    let mutex_handle = single_instance_guard.mutex_handle;
+    let activate_event_handle = single_instance_guard.activate_event_handle;
+    // 放弃 guard 的析构，将句柄交给 run_app 自己管理，以便在重启前主动释放
+    std::mem::forget(single_instance_guard);
+
+    window::run_app(port, server_state, activate_event_handle, mutex_handle);
 }

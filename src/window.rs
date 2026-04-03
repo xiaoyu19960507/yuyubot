@@ -266,8 +266,9 @@ fn load_window_icon() -> Option<tao::window::Icon> {
 use crate::runtime;
 use crate::server::ServerState;
 use std::sync::Arc;
+use windows_sys::Win32::Foundation::CloseHandle;
 
-pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle: usize) {
+pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle: usize, mutex_handle: usize) {
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     let base_url = format!("http://127.0.0.1:{}", port);
@@ -366,23 +367,42 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle:
                 });
 
                 if is_restarting {
+                    // 在启动新进程前，先释放单例锁，避免新进程因为锁冲突而退出
+                    log_info!("正在释放单例锁...");
+                    unsafe {
+                        CloseHandle(mutex_handle as windows_sys::Win32::Foundation::HANDLE);
+                    }
+
                     log_info!("正在重启程序...");
-                    let exe_path = runtime::get_exe_dir().join(
-                        std::env::current_exe()
-                            .ok()
-                            .and_then(|p| p.file_name().map(|n| n.to_os_string()))
-                            .unwrap_or_else(|| "yuyubot.exe".into()),
-                    );
+                    let exe_path = std::env::current_exe().unwrap_or_else(|_| {
+                        runtime::get_exe_dir().join("yuyubot.exe")
+                    });
 
                     use std::os::windows::process::CommandExt;
                     let detached_process = 0x00000008;
-                    let _ = std::process::Command::new(&exe_path)
+                    let spawn_res = std::process::Command::new(&exe_path)
                         .arg("--restarted")
                         .creation_flags(detached_process)
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .spawn();
+
+                    if let Err(e) = spawn_res {
+                        log_error!("重启启动新进程失败: {}", e);
+                    } else {
+                        log_info!("新进程已启动: {:?}", exe_path);
+                    }
+                } else {
+                    // 正常退出时也要释放锁
+                    unsafe {
+                        CloseHandle(mutex_handle as windows_sys::Win32::Foundation::HANDLE);
+                    }
+                }
+
+                // 释放激活事件句柄
+                unsafe {
+                    CloseHandle(activate_event_handle as windows_sys::Win32::Foundation::HANDLE);
                 }
             }
             Event::WindowEvent {

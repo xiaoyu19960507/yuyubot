@@ -271,9 +271,6 @@ for event in client.events():
 import os
 import json
 import requests
-import urllib3
-import sseclient
-import socket
 import sys
 import time
 
@@ -287,7 +284,7 @@ API_URL = f"http://{HOST}:{API_PORT}/api"
 EVENT_URL = f"http://{HOST}:{EVENT_PORT}/event"
 
 def get_headers():
-    headers = {}
+    headers = {'Accept': 'text/event-stream'}
     if TOKEN:
         headers['Authorization'] = f'Bearer {TOKEN}'
     return headers
@@ -302,15 +299,13 @@ def get_plain_text(segments):
 def send_group_message(group_id, text):
     payload = {
         "group_id": group_id,
-        "message": [
-            {"type": "text", "data": {"text": text}}
-        ]
+        "message": [{"type": "text", "data": {"text": text}}]
     }
     try:
         requests.post(
             f"{API_URL}/send_group_message",
             json=payload,
-            headers=get_headers(),
+            headers={'Authorization': f'Bearer {TOKEN}'} if TOKEN else {},
             timeout=10,
         )
     except Exception as e:
@@ -318,60 +313,55 @@ def send_group_message(group_id, text):
 
 def main():
     print("复读机插件已启动")
-
-    headers = {'Accept': 'text/event-stream'}
-    if TOKEN:
-        headers['Authorization'] = f'Bearer {TOKEN}'
-    
-    # 设置全局 socket 超时 (1.5秒)
-    # 这样 urllib3 的阻塞读取会定期抛出 timeout 异常，将控制权交还给 Python
-    # 从而让 Python 有机会检查并响应 KeyboardInterrupt (Ctrl+C)
-    socket.setdefaulttimeout(1.5)
-    
-    http = urllib3.PoolManager()
+    print(f"连接到: {EVENT_URL}")
 
     while True:
         try:
-            response = http.request(
-                'GET',
+            response = requests.get(
                 EVENT_URL,
-                preload_content=False,
-                headers=headers,
+                headers=get_headers(),
+                stream=True,
+                timeout=(5, None)
             )
 
-            client = sseclient.SSEClient(response)
-            for event in client.events():
-                try:
-                    evt = json.loads(event.data)
-                except json.JSONDecodeError:
+            print("已连接到事件流，等待消息...")
+            
+            for line in response.iter_lines():
+                if not line:
                     continue
+                    
+                line = line.decode('utf-8')
 
-                if evt.get('event_type') != 'message_receive':
-                    continue
+                if line.startswith('data:'):
+                    data = line[5:]
+                    try:
+                        evt = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
 
-                msg = evt.get('data', {})
-                if msg.get('message_scene') != 'group':
-                    continue
+                    print(f"收到事件: {line}")
 
-                group_id = msg.get('peer_id')
-                text = get_plain_text(msg.get('segments', []))
+                    if evt.get('event_type') != 'message_receive':
+                        continue
 
-                if not text.startswith('/echo '):
-                    continue
+                    msg = evt.get('data', {})
+                    if msg.get('message_scene') != 'group':
+                        continue
 
-                content = text[len('/echo '):]
-                send_group_message(group_id, content)
-                print(f"复读: {content}")
+                    group_id = msg.get('peer_id')
+                    text = get_plain_text(msg.get('segments', []))
 
-        except (socket.timeout, urllib3.exceptions.ReadTimeoutError):
-            # 读取超时是预期的（为了检查 Ctrl+C），直接 continue 进行下一次循环（重连）
-            continue
+                    if not text.startswith('/echo '):
+                        continue
+
+                    content = text[len('/echo '):]
+                    send_group_message(group_id, content)
+                    print(f"复读: {content}")
+
         except KeyboardInterrupt:
-            # 捕获 Ctrl+C 信号，优雅退出
             print("插件正在退出...")
             sys.exit(0)
         except Exception as e:
-            # 其他网络错误，等待一会再重试
             print(f"连接错误: {e}")
             time.sleep(2)
 

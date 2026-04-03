@@ -76,6 +76,7 @@ pub struct MilkyEventProxy {
     clients: AtomicUsize,
     ws_tx: broadcast::Sender<String>,
     ws_clients: AtomicUsize,
+    bot_state: Arc<crate::server::BotConnectionState>,
 }
 
 use rocket::{Ignite, Rocket};
@@ -86,6 +87,7 @@ pub async fn spawn_milky_proxy_servers(
     event_port: u16,
     bot_config: Arc<RwLock<BotConfig>>,
     plugin_manager: Arc<PluginManager>,
+    bot_state: Arc<crate::server::BotConnectionState>,
 ) -> Result<
     (
         JoinHandle<Result<Rocket<Ignite>, rocket::Error>>,
@@ -107,6 +109,7 @@ pub async fn spawn_milky_proxy_servers(
         clients: AtomicUsize::new(0),
         ws_tx,
         ws_clients: AtomicUsize::new(0),
+        bot_state: bot_state.clone(),
     });
 
     tokio::spawn(run_upstream_sse(event_proxy.clone()));
@@ -244,7 +247,7 @@ async fn proxy_api(
     })
 }
 
-#[get("/event", rank = 2, format = "text/event-stream")]
+#[get("/event", rank = 1, format = "text/event-stream")]
 fn event_stream(
     _auth: PluginAuth,
     proxy: &State<Arc<MilkyEventProxy>>,
@@ -272,7 +275,7 @@ fn event_stream(
     }
 }
 
-#[get("/event", rank = 1)]
+#[get("/event", rank = 2)]
 fn event_ws(
     ws: rocket_ws::WebSocket,
     _auth: PluginAuth,
@@ -335,6 +338,12 @@ fn event_ws(
 
 async fn run_upstream_sse(proxy: Arc<MilkyEventProxy>) {
     loop {
+        // 检查是否应该连接
+        if !proxy.bot_state.should_connect.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            continue;
+        }
+
         if proxy.clients.load(Ordering::SeqCst) == 0 && proxy.ws_clients.load(Ordering::SeqCst) == 0
         {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -373,6 +382,11 @@ async fn run_upstream_sse(proxy: Arc<MilkyEventProxy>) {
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
+            // 检查是否应该断开连接
+            if !proxy.bot_state.should_connect.load(Ordering::SeqCst) {
+                break;
+            }
+
             if proxy.clients.load(Ordering::SeqCst) == 0
                 && proxy.ws_clients.load(Ordering::SeqCst) == 0
             {

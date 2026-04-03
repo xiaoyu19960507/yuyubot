@@ -7,8 +7,7 @@ const BotPage = {
       connected: false,
       connecting: false,
       connectionStatus: '未连接',
-      statusEventSource: null,
-      loginInfo: null
+      statusEventSource: null
     };
   },
   methods: {
@@ -38,39 +37,17 @@ const BotPage = {
     updateStatus(status) {
       this.connected = status.connected;
       this.connecting = status.connecting;
-      
+
       if (status.connected) {
         this.connectionStatus = '已连接';
-        // 连接成功后获取登录信息
-        this.fetchLoginInfo();
       } else {
         // 未连接或正在连接时都清除头像
         this.connectionStatus = status.connecting ? '正在连接...' : '未连接';
-        this.loginInfo = null;
         this.$root.clearUserAvatar();
       }
     },
     
-    async fetchLoginInfo() {
-      try {
-        const response = await fetch('/api/get_login_info', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({})
-        });
-        const result = await response.json();
-        if (result.retcode === 0) {
-          this.loginInfo = result.data;
-          // 通知父组件更新头像
-          this.$root.updateUserAvatar(result.data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch login info:', error);
-      }
-    },
-    
+
     connectStatusSSE() {
       if (this.statusEventSource) {
         this.statusEventSource.close();

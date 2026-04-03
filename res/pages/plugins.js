@@ -10,6 +10,7 @@ const PluginsPage = {
       autoScroll: true,
       pendingStatusUpdates: {},
       activeMoreMenu: null,
+      stoppingPlugins: {},
       confirmDialog: {
         show: false,
         title: '',
@@ -65,7 +66,11 @@ const PluginsPage = {
                 菜单
               </button>
               
-              <button v-if="!plugin.enabled" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
+              <button v-if="stoppingPlugins[plugin.id]" class="btn-warning" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                停止中...
+              </button>
+              <button v-else-if="plugin.status !== 'running'" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 启动
               </button>
@@ -337,6 +342,7 @@ const PluginsPage = {
         });
     },
     stopPlugin(id) {
+      this.$set ? this.$set(this.stoppingPlugins, id, true) : (this.stoppingPlugins = { ...this.stoppingPlugins, [id]: true });
       this.loading = true;
       fetch('/api/plugins/' + encodeURIComponent(id) + '/stop', { method: 'POST' })
         .then(res => res.json())
@@ -346,12 +352,14 @@ const PluginsPage = {
             setTimeout(() => this.loadPlugins(), 500);
           } else {
             alert('停止失败: ' + data.data);
+            this.stoppingPlugins = { ...this.stoppingPlugins, [id]: false };
             this.loading = false;
           }
         })
         .catch(err => {
           console.error('Failed to stop plugin:', err);
           alert('停止失败: ' + err);
+          this.stoppingPlugins = { ...this.stoppingPlugins, [id]: false };
           this.loading = false;
         });
     },
@@ -385,6 +393,9 @@ const PluginsPage = {
               plugin.status = statusEvent.status;
               plugin.enabled = statusEvent.enabled;
               plugin.webui_url = statusEvent.webui_url;
+              if (statusEvent.status !== 'running') {
+                this.stoppingPlugins = { ...this.stoppingPlugins, [statusEvent.plugin_id]: false };
+              }
             } else {
               this.pendingStatusUpdates[statusEvent.plugin_id] = {
                   status: statusEvent.status,

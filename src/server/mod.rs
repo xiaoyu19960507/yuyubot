@@ -31,6 +31,7 @@ pub struct BotConnectionState {
     pub should_connect: AtomicBool,
     pub status_sender: broadcast::Sender<api::BotStatusResponse>,
     pub connection_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub cancel_sender: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 #[cfg(debug_assertions)]
@@ -135,6 +136,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 should_connect: AtomicBool::new(false),
                 status_sender,
                 connection_task: tokio::sync::Mutex::new(None),
+                cancel_sender: tokio::sync::Mutex::new(None),
             });
 
             let bot_config_state = Arc::new(RwLock::new(api::load_bot_config_from_disk(&exe_dir)));
@@ -225,6 +227,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 milky_event_port,
                 bot_config_state.clone(),
                 plugin_manager.clone(),
+                bot_state.clone(),
             )
             .await
             {
