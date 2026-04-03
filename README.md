@@ -235,8 +235,7 @@ print(response.json())
 ```python
 import os
 import json
-import urllib3
-import sseclient
+import requests
 
 host = os.environ['MILKY_HOST']
 event_port = os.environ['MILKY_EVENT_PORT']
@@ -244,22 +243,25 @@ token = os.environ.get('MILKY_TOKEN', '')
 
 event_url = f"http://{host}:{event_port}/event"
 
-headers = (
-    {'Accept': 'text/event-stream', 'Authorization': f'Bearer {token}'}
-    if token
-    else {'Accept': 'text/event-stream'}
-)
+headers = {'Accept': 'text/event-stream'}
+if token:
+    headers['Authorization'] = f'Bearer {token}'
 
-response = urllib3.PoolManager().request(
-    'GET',
-    event_url,
-    preload_content=False,
-    headers=headers,
-)
+response = requests.get(event_url, headers=headers, stream=True, timeout=(5, None))
 
-client = sseclient.SSEClient(response)
-for event in client.events():
-    print(json.loads(event.data))
+for line in response.iter_lines(decode_unicode=False):
+    if not line:
+        continue
+    
+    line = line.decode('utf-8')
+    
+    if line.startswith('data:'):
+        data = line[5:]
+        try:
+            evt = json.loads(data)
+            print(evt)
+        except json.JSONDecodeError:
+            continue
 ```
 
 ### 完整示例
@@ -271,8 +273,8 @@ for event in client.events():
 import os
 import json
 import requests
-import sys
 import time
+import threading
 
 # 从环境变量获取配置
 HOST = os.environ['MILKY_HOST']
@@ -282,6 +284,7 @@ TOKEN = os.environ.get('MILKY_TOKEN', '')
 
 API_URL = f"http://{HOST}:{API_PORT}/api"
 EVENT_URL = f"http://{HOST}:{EVENT_PORT}/event"
+
 
 def get_headers():
     headers = {'Accept': 'text/event-stream'}
@@ -295,6 +298,10 @@ def get_plain_text(segments):
         if seg.get('type') == 'text':
             parts.append(seg.get('data', {}).get('text', ''))
     return ''.join(parts)
+
+def signal_handler(sig, frame):
+    print("\n插件正在退出...")
+    os._exit(0)
 
 def send_group_message(group_id, text):
     payload = {
@@ -311,10 +318,18 @@ def send_group_message(group_id, text):
     except Exception as e:
         print(f"发送消息失败: {e}")
 
-def main():
-    print("复读机插件已启动")
-    print(f"连接到: {EVENT_URL}")
+def handle_group_message(msg):
+    group_id = msg.get('peer_id')
+    text = get_plain_text(msg.get('segments', []))
 
+    if not text.startswith('/echo '):
+        return
+
+    content = text[len('/echo '):]
+    send_group_message(group_id, content)
+    print(f"复读: {content}")
+
+def event_loop():
     while True:
         try:
             response = requests.get(
@@ -325,11 +340,11 @@ def main():
             )
 
             print("已连接到事件流，等待消息...")
-            
-            for line in response.iter_lines():
+
+            for line in response.iter_lines(chunk_size=1, decode_unicode=False):
                 if not line:
                     continue
-                    
+
                 line = line.decode('utf-8')
 
                 if line.startswith('data:'):
@@ -348,22 +363,22 @@ def main():
                     if msg.get('message_scene') != 'group':
                         continue
 
-                    group_id = msg.get('peer_id')
-                    text = get_plain_text(msg.get('segments', []))
+                    handle_group_message(msg)
 
-                    if not text.startswith('/echo '):
-                        continue
-
-                    content = text[len('/echo '):]
-                    send_group_message(group_id, content)
-                    print(f"复读: {content}")
-
-        except KeyboardInterrupt:
-            print("插件正在退出...")
-            sys.exit(0)
         except Exception as e:
             print(f"连接错误: {e}")
             time.sleep(2)
+
+def main():
+    import signal
+    signal.signal(signal.SIGINT, signal_handler)
+
+    print("复读机插件已启动")
+    print(f"连接到: {EVENT_URL}")
+
+    worker = threading.Thread(target=event_loop, daemon=True)
+    worker.start()
+    worker.join()
 
 if __name__ == '__main__':
     main()
@@ -404,3 +419,85 @@ cargo build --release
 - WebView2
 
 - VC++ 14 Runtime 
+
+
+## YuyuBot 项目架构分析
+
+YuyuBot 是一个专门为运行 Bot 和各类插件而设计的桌面客户端。整体架构采用了类似 Tauri 的 **"Rust 后端 + WebView 前端"** 模式，但它是通过直接组合底层的 `wry`、`tao` 和 `rocket` 来实现的，并在底层实现了复杂的进程管理和网络代理机制。
+
+以下是详尽的架构解析：
+
+## 1. 整体技术栈与系统级设计
+
+### 前端与 GUI 宿主
+* **WebView 渲染**：采用 `wry` 提供原生的 WebView 以渲染打包进二进制的静态前端（通过 `rust-embed` 实现资源嵌入，无需附带额外文件）。
+* **窗口与事件引擎**：使用 `tao` 作为跨平台窗口构建和事件循环管理引擎。
+* **系统交互**：使用 `tray-icon` 实现 Windows 右下角托盘交互及后台运行。项目配置了 `winres` 附加图标，并使用了 Windows API（`windows-sys`）实现了单实例检测（`CreateMutexW`），且在重复启动时主动唤醒已有的后台实例。
+
+### 后端运行时与网络框架
+* **异步运行时**：`Tokio` 提供底层的全异步运行时。
+* **Web/API 服务器**：`Rocket (0.5.1)` 作为核心的 Web/API 服务器框架。由于主要跑在本地，配置了随机端口（`main_port = 0`），并将实际监听端口回传给插件系统。
+
+---
+
+## 2. 插件生命周期管理（核心亮点）
+
+项目的核心价值在于对第三方插件的管理与调度：
+
+* **Pty / 虚拟终端支持 (`expectrl`)**：
+  * YuyuBot 没有简单地使用 `std::process::Command`，而是专门引入了 `expectrl` 库来创建 **PTY（伪终端）** 会话。
+  * 这意味着由 YuyuBot 启动的子插件/子进程会有原生的终端输出体验（特别是对于 Node.js 或 Python 编写的子进程，能防止因管道缓冲问题导致的日志延迟）。
+  * 使用了 `strip_ansi_escapes` 来清理子进程输出中的终端颜色代码，然后再将纯净文本通过 `tokio::sync::broadcast` 推送给前端。
+* **环境隔离与优雅退出**：
+  * 在启动子进程时，会创建一个临时的运行目录 (`run_tmp_dir`)。
+  * 在请求停止进程时，代码通过专门的函数尝试发送 `Ctrl+C` 信号进行优雅关闭。
+* **配置与目录**：
+  * 所有的插件存放在 `app/` 目录下。启动时，`load_plugins` 会遍历此目录加载并读取插件的元数据。
+
+---
+
+## 3. Milky Proxy (Bot 事件与 API 中继架构)
+
+这可以说是项目中最复杂的一环，采用了类似**中间件总线**的设计模式。YuyuBot 本身并不是 Bot，它是一个**客户端网关**。
+
+### 数据流拓扑图
+
+```text
+实际的 Bot 平台端点 (Host:Port)  <--->  YuyuBot (BotConnectionState)
+                                       |
+             +-------------------------+-------------------------+
+             |                     (内部转发)                    |
+  Milky Proxy (API Port)                              Milky Proxy (Event Port)
+             |                                                   |
+   +---------+---------+                               +---------+---------+
+   |         |         |                               |         |         |
+Plugin1   Plugin2   PluginN                         Plugin1   Plugin2   PluginN
+```
+
+### 设计初衷与实现
+* **解决痛点**：如果所有的子插件直接连接真正的 Bot 端点，可能会引起端口竞争、重复鉴权以及流量重复消耗。
+* **双代理服务**：YuyuBot 在启动时利用 `Rocket` 起了另外两个服务：**Milky Proxy API 服务器** 和 **Milky Proxy Event 服务器**。
+* **参数传递**：当启动子插件（通过 `expectrl`）时，YuyuBot 会通过环境变量，把自己的 Milky Proxy 地址、随机生成的 API Token 传递给子进程。
+* **权限与分发**：子进程只需向这个本地代理发送请求，代理模块会对插件进行权限验证（`PluginAuth` 依赖请求头），然后代发给真实的 Bot 服务器，最后将事件**多播分发**给每个插件。
+
+---
+
+## 4. 数据与状态管理
+
+项目中广泛使用了 `tokio::sync::RwLock`、`Arc`、`AtomicBool` 和 `AtomicU16` 进行线程安全的内存状态管理，具体包括：
+
+* **`ServerState`**：保存了主事件循环的 Proxy 句柄以及插件管理器引用。
+* **`BotConnectionState`**：管理与真实 Bot 端点的连接状态和并发控制（如连接 Task、取消 Sender）。
+* **SSE / WebSocket 推送**：针对如“运行日志”、“插件状态”等高频推送需求，利用了 Rocket 的 EventStream (`SseMessage`) 实现流式推送给 Web 前端。
+
+---
+
+## 架构总结
+
+YuyuBot 是一个**带可视化面板的本地反向代理与进程管理器**。
+
+1. **表现层**：最外层用 `Tao`/`Wry` 包装了一个轻量级本地 Web 界面。
+2. **控制与网络层**：中间层使用 `Rocket`/`Tokio` 构建了一个高度灵活的本地服务器，除了服务 Web 前端的控制请求，最主要的功能是承担 **"Milky Proxy"** 中继器的角色。
+3. **核心执行层**：最底层使用 `expectrl` 提供了对子插件进程的无缓冲标准输出捕捉与安全管理，并借由代理服务器拦截并分配 Bot 数据。
+
+> **💡 适用场景：** 这个架构非常适合需要在本地长期挂载、由多个松耦合的扩展工具（比如 AI 回复、自动管理等不同语言编写的独立进程）共同协作的 Bot 运维场景。

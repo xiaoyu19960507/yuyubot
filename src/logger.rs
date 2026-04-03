@@ -76,7 +76,8 @@ pub fn init_logger() {
         let filter = EnvFilter::from_default_env()
             .add_directive(tracing::Level::INFO.into())
             .add_directive("rocket=off".parse().unwrap()) // 完全屏蔽 Rocket 的所有日志
-            .add_directive("hyper=off".parse().unwrap()); // 屏蔽底层 hyper 库的日志
+            .add_directive("hyper=off".parse().unwrap()) // 屏蔽底层 hyper 库的日志
+            .add_directive("tao=off".parse().unwrap()); // 屏蔽 tao 事件循环警告
 
         let registry = tracing_subscriber::registry()
             .with(AppLogLayer)

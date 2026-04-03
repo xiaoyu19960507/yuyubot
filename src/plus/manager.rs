@@ -509,7 +509,7 @@ impl PluginManager {
                             let sent = try_send_ctrl_c(pid);
                             if sent {
                                 let deadline = std::time::Instant::now()
-                                    + std::time::Duration::from_secs(5);
+                                    + std::time::Duration::from_secs(3);
                                 while session.is_alive().unwrap_or(false)
                                     && std::time::Instant::now() < deadline
                                 {
@@ -517,7 +517,6 @@ impl PluginManager {
                                         Ok(0) => break,
                                         Ok(n) => {
                                             let bytes = &buf[..n];
-                                            // 去除 ANSI 转义序列
                                             let stripped = strip_ansi_escapes::strip(bytes);
                                             let text =
                                                 String::from_utf8_lossy(&stripped).to_string();
@@ -533,7 +532,7 @@ impl PluginManager {
                                             if e.kind() == std::io::ErrorKind::WouldBlock => {}
                                         Err(_) => {}
                                     }
-                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    std::thread::sleep(std::time::Duration::from_millis(50));
                                 }
                             }
 
