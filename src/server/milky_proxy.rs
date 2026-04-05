@@ -97,14 +97,14 @@ pub async fn spawn_milky_proxy_servers(
 > {
     let api_proxy = Arc::new(MilkyApiProxy {
         bot_config: bot_config.clone(),
-        client: reqwest::Client::new(),
+        client: reqwest::Client::builder().no_proxy().build()?,
     });
 
     let (tx, _) = broadcast::channel::<SseMessage>(2048);
     let (ws_tx, _) = broadcast::channel::<String>(2048);
     let event_proxy = Arc::new(MilkyEventProxy {
         bot_config: bot_config.clone(),
-        client: reqwest::Client::new(),
+        client: reqwest::Client::builder().no_proxy().build()?,
         tx,
         clients: AtomicUsize::new(0),
         ws_tx,
@@ -266,7 +266,7 @@ fn event_stream(
 
         let mut rx = proxy.tx.subscribe();
         while let Ok(msg) = rx.recv().await {
-            let mut ev = Event::data(msg.data);
+            let mut ev = Event::data(format!(" {}", msg.data));
             if let Some(name) = msg.event {
                 ev = ev.event(name);
             }

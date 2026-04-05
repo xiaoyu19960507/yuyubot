@@ -675,7 +675,7 @@ pub async fn get_login_info(
         if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
             let api_url = format!("{}/get_login_info", config.get_api_url());
 
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder().no_proxy().build().expect("Failed to build reqwest client");
             let mut request_builder = client
                 .post(&api_url)
                 .header("Content-Type", "application/json");
@@ -822,7 +822,7 @@ async fn connect_bot_sse(
         }
 
         // 构建HTTP客户端
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().no_proxy().build().expect("Failed to build reqwest client");
         let mut request_builder = client
             .get(sse_url)
             .header("Accept", "text/event-stream")
