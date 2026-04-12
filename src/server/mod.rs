@@ -32,6 +32,8 @@ pub struct BotConnectionState {
     pub status_sender: broadcast::Sender<api::BotStatusResponse>,
     pub connection_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub cancel_sender: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// 配置文件写入锁，防止并发写入导致配置损坏
+    pub config_write_lock: tokio::sync::Mutex<()>,
 }
 
 #[cfg(debug_assertions)]
@@ -137,6 +139,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 status_sender,
                 connection_task: tokio::sync::Mutex::new(None),
                 cancel_sender: tokio::sync::Mutex::new(None),
+                config_write_lock: tokio::sync::Mutex::new(()),
             });
 
             let bot_config_state = Arc::new(RwLock::new(api::load_bot_config_from_disk(&exe_dir)));

@@ -98,9 +98,8 @@ fn create_window_with_url(
     url: &str,
     web_context: &mut wry::WebContext,
 ) {
-    let version = env!("CARGO_PKG_VERSION");
     let window_res = WindowBuilder::new()
-        .with_title(format!("羽羽BOT v{} - 加载中...", version))
+        .with_title("加载中...")
         .with_inner_size(LogicalSize::new(1024.0, 768.0))
         .with_window_icon(load_window_icon())
         .with_visible(false)
@@ -419,7 +418,11 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle:
                 UserEvent::TitleChanged(window_id, title) => {
                     if let Some((window, _)) = webviews.get(&window_id) {
                         let version = env!("CARGO_PKG_VERSION");
-                        window.set_title(&format!("{} v{}", title, version));
+                        if title == "羽羽BOT" && main_window_id == Some(window_id) {
+                            window.set_title(&format!("羽羽BOT v{}", version));
+                        } else {
+                            window.set_title(&title);
+                        }
                     }
                 }
                 UserEvent::TrayIconEvent(TrayIconEvent::Click {

@@ -505,21 +505,26 @@ pub async fn save_bot_config(
     let config_dir = exe_dir.join("config");
     let config_file = config_dir.join("config.json");
 
-    // 创建config目录
-    if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
-        log_error!("Failed to create config directory: {}", e);
-        return Json(ApiResponse {
-            retcode: 1,
-            data: format!("Failed to create config directory: {}", e),
-        });
-    }
+    // 获取配置写入锁，防止并发写入
+    {
+        let _guard = bot_state.config_write_lock.lock().await;
 
-    if let Err(e) = tokio::fs::write(&config_file, json_str).await {
-        log_error!("Failed to write config file: {}", e);
-        return Json(ApiResponse {
-            retcode: 1,
-            data: format!("Failed to write config file: {}", e),
-        });
+        // 创建config目录
+        if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
+            log_error!("Failed to create config directory: {}", e);
+            return Json(ApiResponse {
+                retcode: 1,
+                data: format!("Failed to create config directory: {}", e),
+            });
+        }
+
+        if let Err(e) = tokio::fs::write(&config_file, &json_str).await {
+            log_error!("Failed to write config file: {}", e);
+            return Json(ApiResponse {
+                retcode: 1,
+                data: format!("Failed to write config file: {}", e),
+            });
+        }
     }
 
     *bot_config_state.write().await = config_inner.clone();
@@ -590,7 +595,7 @@ pub async fn disconnect_bot(
     }
 
     // 更新配置文件，设置auto_connect为false
-    update_auto_connect_status(false).await;
+    update_auto_connect_status(bot_state, false).await;
 
     {
         let mut config = bot_config_state.write().await;
@@ -785,25 +790,28 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
     }
 }
 
-async fn update_auto_connect_status(auto_connect: bool) {
-    let _ = tokio::task::spawn_blocking(move || {
-        let exe_dir = runtime::get_exe_dir();
+async fn update_auto_connect_status(
+    bot_state: &Arc<crate::server::BotConnectionState>,
+    auto_connect: bool,
+) {
+    // 获取配置写入锁，防止并发写入
+    let _guard = bot_state.config_write_lock.lock().await;
 
-        let config_file = exe_dir.join("config").join("config.json");
+    let exe_dir = runtime::get_exe_dir();
 
-        // 读取现有配置
-        if let Ok(content) = std::fs::read_to_string(&config_file) {
-            if let Ok(mut config) = serde_json::from_str::<BotConfig>(&content) {
-                config.auto_connect = auto_connect;
+    let config_file = exe_dir.join("config").join("config.json");
 
-                // 保存更新后的配置
-                if let Ok(json_str) = serde_json::to_string_pretty(&config) {
-                    let _ = std::fs::write(&config_file, json_str);
-                }
+    // 读取现有配置
+    if let Ok(content) = tokio::fs::read_to_string(&config_file).await {
+        if let Ok(mut config) = serde_json::from_str::<BotConfig>(&content) {
+            config.auto_connect = auto_connect;
+
+            // 保存更新后的配置
+            if let Ok(json_str) = serde_json::to_string_pretty(&config) {
+                let _ = tokio::fs::write(&config_file, json_str).await;
             }
         }
-    })
-    .await;
+    }
 }
 
 async fn connect_bot_sse(
@@ -846,7 +854,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 连接成功后，设置auto_connect为true
-                    update_auto_connect_status(true).await;
+                    update_auto_connect_status(&bot_state, true).await;
 
                     // 发送连接成功状态
                     let status = BotStatusResponse {
@@ -874,7 +882,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 用户主动断开连接，设置auto_connect为false
-                    update_auto_connect_status(false).await;
+                    update_auto_connect_status(&bot_state, false).await;
 
                     // 发送断开状态
                     let status = BotStatusResponse {
@@ -910,7 +918,7 @@ async fn connect_bot_sse(
                         .store(false, std::sync::atomic::Ordering::SeqCst);
 
                     // 用户主动断开连接，设置auto_connect为false
-                    update_auto_connect_status(false).await;
+                    update_auto_connect_status(&bot_state, false).await;
 
                     // 发送断开状态
                     let status = BotStatusResponse {

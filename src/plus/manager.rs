@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock, Mutex};
 use tokio::task::spawn_blocking;
 
 #[derive(Serialize, Deserialize, Default)]
@@ -32,6 +32,8 @@ pub struct PluginManager {
     status_sender: broadcast::Sender<PluginStatusEvent>,
     port_ready: Notify,
     milky_ready: Notify,
+    /// 配置文件写入锁，防止并发写入导致配置损坏
+    config_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -69,6 +71,7 @@ impl PluginManager {
             status_sender,
             port_ready: Notify::new(),
             milky_ready: Notify::new(),
+            config_lock: Mutex::new(()),
         }
     }
 
@@ -225,6 +228,9 @@ impl PluginManager {
     }
 
     async fn save_config(&self, config: &PluginConfig) {
+        // 获取配置写入锁，防止并发写入
+        let _guard = self.config_lock.lock().await;
+
         let config_path = self.get_config_path();
         let content = match serde_json::to_string_pretty(config) {
             Ok(c) => c,
@@ -357,14 +363,17 @@ impl PluginManager {
         self.wait_for_port().await;
         self.wait_for_milky().await;
 
-        let plugins = self.plugins.read().await;
-        let plugin = plugins
-            .get(plugin_id)
-            .ok_or("Plugin not found".to_string())?
-            .clone();
-        drop(plugins);
-
-        let run_id = plugin.begin_run();
+        // 在持有读锁的情况下调用 begin_run()，避免竞态条件
+        let (plugin, run_id) = {
+            let plugins = self.plugins.read().await;
+            let plugin = plugins
+                .get(plugin_id)
+                .ok_or("Plugin not found".to_string())?
+                .clone();
+            // 在释放锁之前调用 begin_run()，确保插件不会被中途删除
+            let run_id = plugin.begin_run();
+            (plugin, run_id)
+        };
         let run_tmp_dir =
             plugin
                 .tmp_dir
@@ -488,8 +497,9 @@ impl PluginManager {
                         let plugin_inner = plugin_clone.clone();
                         let sender = output_sender.clone();
                         let id = plugin_id_clone.clone();
-                        rt_handle.block_on(async {
-                            plugin_inner.add_output(msg.clone()).await;
+                        let msg_for_async = msg.clone();
+                        let _handle = rt_handle.spawn(async move {
+                            plugin_inner.add_output(msg_for_async).await;
                         });
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id,
@@ -621,8 +631,9 @@ impl PluginManager {
                                 let plugin_inner = plugin_clone.clone();
                                 let sender = output_sender.clone();
                                 let id = plugin_id_clone.clone();
-                                rt_handle.block_on(async {
-                                    plugin_inner.add_output(err_msg.clone()).await;
+                                let err_msg_for_async = err_msg.clone();
+                                let _handle = rt_handle.spawn(async move {
+                                    plugin_inner.add_output(err_msg_for_async).await;
                                 });
                                 let _ = sender.send(PluginOutputEvent {
                                     plugin_id: id,
@@ -660,8 +671,9 @@ impl PluginManager {
                             };
                             let sender = output_sender.clone();
                             let id = plugin_id_clone.clone();
-                            rt_handle.block_on(async {
-                                plugin_inner.add_output(msg.clone()).await;
+                            let msg_for_async = msg.clone();
+                            let _handle = rt_handle.spawn(async move {
+                                plugin_inner.add_output(msg_for_async).await;
                                 plugin_inner.set_status(PluginStatus::Stopped).await;
                                 plugin_inner.set_api_token(None).await;
                                 plugin_inner.clear_webui().await;
@@ -699,8 +711,9 @@ impl PluginManager {
                     let sender = output_sender.clone();
                     let id = plugin_id_clone.clone();
                     if plugin_clone.is_current_run(run_id) {
-                        rt_handle.block_on(async {
-                            plugin_inner.add_output(err_msg.clone()).await;
+                        let err_msg_for_async = err_msg.clone();
+                        let _handle = rt_handle.spawn(async move {
+                            plugin_inner.add_output(err_msg_for_async).await;
                             plugin_inner.set_status(PluginStatus::Error).await;
                             plugin_inner.set_api_token(None).await;
                             plugin_inner.clear_webui().await;
@@ -934,8 +947,9 @@ fn process_output(
         if !line.is_empty() {
             let line_clone = line.to_string();
             let plugin_clone = plugin.clone();
-            rt.block_on(async {
-                plugin_clone.add_output(line_clone.clone()).await;
+            let line_for_async = line_clone.clone();
+            let _handle = rt.spawn(async move {
+                plugin_clone.add_output(line_for_async).await;
             });
             let _ = sender.send(PluginOutputEvent {
                 plugin_id: plugin_id.to_string(),
