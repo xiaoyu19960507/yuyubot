@@ -248,7 +248,7 @@ async fn fetch_bot_login_info_from_config(config: &BotConfig) -> Result<LoginInf
 pub fn get_app_nums() -> Json<ApiResponse<i32>> {
     Json(ApiResponse {
         retcode: 0,
-        data: 8,
+        data: 9,
     })
 }
 

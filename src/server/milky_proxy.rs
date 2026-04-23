@@ -1,5 +1,9 @@
 use crate::plus::PluginManager;
 use crate::server::api::BotConfig;
+use crate::server::permissions::{
+    extract_target_group_id_from_api, extract_target_group_id_from_event, is_group_allowed,
+    permission_mode_name, PermissionConfig,
+};
 use futures_util::StreamExt;
 use rocket::data::{Data, ToByteUnit};
 use rocket::fairing::AdHoc;
@@ -66,12 +70,14 @@ impl<'r> FromRequest<'r> for PluginAuth {
 
 pub struct MilkyApiProxy {
     bot_config: Arc<RwLock<BotConfig>>,
+    permission_config: Arc<RwLock<PermissionConfig>>,
     client: reqwest::Client,
     bot_state: Arc<crate::server::BotConnectionState>,
 }
 
 pub struct MilkyEventProxy {
     bot_config: Arc<RwLock<BotConfig>>,
+    permission_config: Arc<RwLock<PermissionConfig>>,
     client: reqwest::Client,
     tx: broadcast::Sender<SseMessage>,
     clients: AtomicUsize,
@@ -87,6 +93,7 @@ pub async fn spawn_milky_proxy_servers(
     api_port: u16,
     event_port: u16,
     bot_config: Arc<RwLock<BotConfig>>,
+    permission_config: Arc<RwLock<PermissionConfig>>,
     plugin_manager: Arc<PluginManager>,
     bot_state: Arc<crate::server::BotConnectionState>,
 ) -> Result<
@@ -98,6 +105,7 @@ pub async fn spawn_milky_proxy_servers(
 > {
     let api_proxy = Arc::new(MilkyApiProxy {
         bot_config: bot_config.clone(),
+        permission_config: permission_config.clone(),
         client: reqwest::Client::builder().no_proxy().build()?,
         bot_state: bot_state.clone(),
     });
@@ -106,6 +114,7 @@ pub async fn spawn_milky_proxy_servers(
     let (ws_tx, _) = broadcast::channel::<String>(2048);
     let event_proxy = Arc::new(MilkyEventProxy {
         bot_config: bot_config.clone(),
+        permission_config: permission_config.clone(),
         client: reqwest::Client::builder().no_proxy().build()?,
         tx,
         clients: AtomicUsize::new(0),
@@ -170,6 +179,15 @@ pub async fn spawn_milky_proxy_servers(
     Ok((api_handle, event_handle))
 }
 
+async fn should_forward_event(proxy: &MilkyEventProxy, data: &str) -> bool {
+    let Some(group_id) = extract_target_group_id_from_event(data) else {
+        return true;
+    };
+
+    let permission_config = proxy.permission_config.read().await.clone();
+    is_group_allowed(&permission_config, group_id)
+}
+
 pub struct ProxyBytesResponse {
     status: Status,
     content_type: ContentType,
@@ -224,6 +242,28 @@ async fn proxy_api(
         .map_err(|_| Status::BadRequest)?
         .value;
 
+    let plugin_id = auth.plugin_id.clone();
+
+    if let Some(group_id) = match extract_target_group_id_from_api(api, &body) {
+        Ok(group_id) => group_id,
+        Err(message) => {
+            log_warn!("Blocked plugin {} API {}: {}", plugin_id, api, message);
+            return Ok(ProxyBytesResponse::json_error(Status::BadRequest, &message));
+        }
+    } {
+        let permission_config = proxy.permission_config.read().await.clone();
+        if !is_group_allowed(&permission_config, group_id) {
+            let message = format!(
+                "Plugin is not allowed to use side-effect API '{}' for group {} in {} mode",
+                api,
+                group_id,
+                permission_mode_name(permission_config.mode),
+            );
+            log_warn!("Blocked plugin {} API {} for group {}", plugin_id, api, group_id);
+            return Ok(ProxyBytesResponse::json_error(Status::Forbidden, &message));
+        }
+    }
+
     let config = proxy.bot_config.read().await.clone();
     let url = format!("{}/{}", config.get_api_url(), api);
 
@@ -243,7 +283,7 @@ async fn proxy_api(
         builder = builder.header("Authorization", format!("Bearer {}", token));
     }
 
-    builder = builder.header("X-YUYU-PLUGIN-ID", auth.plugin_id);
+    builder = builder.header("X-YUYU-PLUGIN-ID", plugin_id);
 
     let response = builder
         .body(body)
@@ -448,6 +488,12 @@ async fn run_upstream_sse(proxy: Arc<MilkyEventProxy>) {
                     }
 
                     let data = data_lines.join("\n");
+                    if !should_forward_event(&proxy, &data).await {
+                        current_event = None;
+                        data_lines.clear();
+                        continue;
+                    }
+
                     let _ = proxy.tx.send(SseMessage {
                         event: current_event.clone(),
                         data: data.clone(),

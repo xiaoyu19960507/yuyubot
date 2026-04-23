@@ -10,6 +10,7 @@
   <script src="pages/plugins.js"></script>
   <script src="pages/system.js"></script>
   <script src="pages/bot.js"></script>
+  <script src="pages/permissions.js"></script>
   <script src="pages/about.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -139,7 +140,7 @@
     .toggle-switch input:checked + .toggle-slider { background-color: var(--accent-color); }
     .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
     .toggle-label { font-size: 14px; color: var(--text-primary); user-select: none; }
-    .btn-clear { display: inline-flex; align-items: center; gap: 6px; background-color: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+    .btn-clear { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background-color: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; }
     .btn-clear:hover { background-color: var(--accent-color); color: white; border-color: var(--accent-color); }
     .btn-clear:active { transform: scale(0.98); }
     .btn-clear svg { width: 16px; height: 16px; }
@@ -294,6 +295,36 @@
     .modal-footer { display: flex; justify-content: flex-end; gap: 10px; }
     .btn-text { background: none; border: none; padding: 8px 16px; cursor: pointer; color: var(--text-secondary); font-size: 14px; border-radius: 6px; transition: background-color 0.2s; }
     .btn-text:hover { background-color: var(--hover-bg); color: var(--text-primary); }
+    .text-muted { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+    .info-panel { padding: 14px 16px; background: var(--hover-bg); border: 1px solid var(--border-color); border-radius: 10px; }
+    .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .permissions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+    .group-selector-toolbar { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+    .group-options-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 16px; }
+    .group-option-card {
+      width: 100%;
+      border: 1px solid var(--border-color);
+      background: var(--hover-bg);
+      color: var(--text-primary);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      text-align: left;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .group-option-card:hover { border-color: var(--accent-color); background: var(--bg-secondary); }
+    .group-option-card.active { border-color: var(--accent-color); background: rgba(107, 91, 149, 0.12); box-shadow: var(--card-shadow); }
+    .group-option-card:disabled { cursor: not-allowed; opacity: 0.7; }
+    .group-option-name { font-size: 15px; font-weight: 600; }
+    .group-option-meta { font-size: 12px; color: var(--text-secondary); }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .tag-chip { padding: 4px 10px; border-radius: 999px; background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 12px; }
+    .tag-chip-button { cursor: pointer; transition: all 0.2s; }
+    .tag-chip-button:hover { border-color: var(--accent-color); color: var(--accent-color); }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   </style>
@@ -331,6 +362,7 @@
         <plugins-page v-if="currentPage === 'plugins'"></plugins-page>
         <system-page v-if="currentPage === 'system'" :system-config="systemConfig"></system-page>
         <bot-page v-if="currentPage === 'bot'" :bot-config="botConfig"></bot-page>
+        <permissions-page v-if="currentPage === 'permissions'"></permissions-page>
         <about-page v-if="currentPage === 'about'"></about-page>
       </div>
     </transition>
@@ -392,6 +424,12 @@ const app = createApp({
       { id: 'bot', name: 'BOT', icon: '<line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line>' },
       { id: 'about', name: '关于', icon: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>' }
     ];
+    navItems.splice(navItems.length - 1, 0, {
+      id: 'permissions',
+      name: '权限',
+      icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path>'
+    });
+    navItems[navItems.length - 2].name = '\u6743\u9650';
     const logs = ref([]);
     const systemConfig = ref({ port: 8080, dataDir: './data', autoStart: true, autoUpdate: false });
     const botConfig = ref({ host: 'localhost', apiPort: 3010, eventPort: 3011, token: '' });
@@ -523,6 +561,7 @@ app.component('logs-page', LogsPage);
 app.component('plugins-page', PluginsPage);
 app.component('system-page', SystemPage);
 app.component('bot-page', BotPage);
+app.component('permissions-page', PermissionsPage);
 app.component('about-page', AboutPage);
 app.mount('#app');
 </script>

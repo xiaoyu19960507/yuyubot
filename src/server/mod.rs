@@ -1,5 +1,6 @@
 pub mod api;
 pub mod milky_proxy;
+pub mod permissions;
 
 use crate::plus::PluginManager;
 use crate::runtime;
@@ -143,6 +144,9 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
             });
 
             let bot_config_state = Arc::new(RwLock::new(api::load_bot_config_from_disk(&exe_dir)));
+            let permission_config_state = Arc::new(RwLock::new(
+                permissions::load_permission_config_from_disk(&exe_dir),
+            ));
 
             let config = Config {
                 address,
@@ -160,6 +164,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 .manage(system_info.clone())
                 .manage(bot_state.clone())
                 .manage(bot_config_state.clone())
+                .manage(permission_config_state.clone())
                 .manage(plugin_manager.clone())
                 .manage(main_proxy.clone())
                 .mount("/", routes![index, assets, api::set_webui])
@@ -195,7 +200,10 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                         api::plugins_status_stream,
                         api::plugins_events_stream,
                         api::get_ui_state,
-                        api::save_ui_state
+                        api::save_ui_state,
+                        permissions::get_permission_config,
+                        permissions::get_permission_group_options,
+                        permissions::save_permission_config
                     ],
                 )
                 .attach(AdHoc::on_liftoff("Get Port", move |rocket| {
@@ -229,6 +237,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                 milky_api_port,
                 milky_event_port,
                 bot_config_state.clone(),
+                permission_config_state.clone(),
                 plugin_manager.clone(),
                 bot_state.clone(),
             )
