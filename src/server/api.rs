@@ -42,10 +42,43 @@ pub struct AppInfo {
     pub version: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+fn default_ui_last_page() -> String {
+    "plugins".to_string()
+}
+
+fn default_ui_theme() -> String {
+    "light".to_string()
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct UiState {
-    #[serde(default)]
+    #[serde(default = "default_ui_last_page")]
     pub last_page: String,
+    #[serde(default = "default_ui_theme")]
+    pub theme: String,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            last_page: default_ui_last_page(),
+            theme: default_ui_theme(),
+        }
+    }
+}
+
+impl UiState {
+    fn normalized(mut self) -> Self {
+        if self.last_page.trim().is_empty() {
+            self.last_page = default_ui_last_page();
+        }
+
+        if self.theme != "dark" {
+            self.theme = default_ui_theme();
+        }
+
+        self
+    }
 }
 
 pub struct PluginCaller {
@@ -111,13 +144,11 @@ pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
     let config_file = exe_dir.join("config").join("ui.json");
 
     let state = if let Ok(content) = tokio::fs::read_to_string(&config_file).await {
-        serde_json::from_str::<UiState>(&content).unwrap_or(UiState {
-            last_page: "plugins".to_string(),
-        })
+        serde_json::from_str::<UiState>(&content)
+            .unwrap_or_default()
+            .normalized()
     } else {
-        UiState {
-            last_page: "plugins".to_string(),
-        }
+        UiState::default()
     };
 
     Json(ApiResponse {
@@ -128,7 +159,7 @@ pub async fn get_ui_state() -> Json<ApiResponse<UiState>> {
 
 #[post("/ui/state", format = "json", data = "<state>")]
 pub async fn save_ui_state(state: Json<UiState>) -> Json<ApiResponse<String>> {
-    let state_inner = state.into_inner();
+    let state_inner = state.into_inner().normalized();
     let exe_dir = runtime::get_exe_dir();
 
     let config_dir = exe_dir.join("config");
