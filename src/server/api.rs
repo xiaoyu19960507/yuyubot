@@ -189,6 +189,61 @@ impl BotConfig {
     }
 }
 
+async fn fetch_bot_login_info_from_config(config: &BotConfig) -> Result<LoginInfo, String> {
+    let api_url = format!("{}/get_login_info", config.get_api_url());
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build reqwest client: {}", e))?;
+
+    let mut request_builder = client
+        .post(&api_url)
+        .header("Content-Type", "application/json");
+
+    if let Some(token_str) = config.token.as_deref() {
+        request_builder =
+            request_builder.header("Authorization", format!("Bearer {}", token_str));
+    }
+
+    let response = request_builder
+        .body("{}".to_string())
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read API response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("API returned HTTP {}", status));
+    }
+
+    let bot_response = serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|e| format!("Failed to parse API response: {}", e))?;
+
+    let uin = bot_response
+        .get("data")
+        .and_then(|d| d.get("uin"))
+        .and_then(|u| u.as_i64())
+        .ok_or_else(|| "API response missing data.uin".to_string())?;
+
+    let nickname = bot_response
+        .get("data")
+        .and_then(|d| d.get("nickname"))
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| "API response missing data.nickname".to_string())?;
+
+    Ok(LoginInfo {
+        uin,
+        nickname: nickname.to_string(),
+    })
+}
+
 #[get("/get_app_nums")]
 pub fn get_app_nums() -> Json<ApiResponse<i32>> {
     Json(ApiResponse {
@@ -530,8 +585,6 @@ pub async fn save_bot_config(
     *bot_config_state.write().await = config_inner.clone();
 
     // 尝试连接SSE
-    let token = config_inner.token.clone();
-    let sse_url = config_inner.get_event_url();
     let bot_state_clone = bot_state.inner().clone();
 
     if let Some(cancel) = bot_state_clone.cancel_sender.lock().await.take() {
@@ -559,8 +612,9 @@ pub async fn save_bot_config(
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
     *bot_state_clone.cancel_sender.lock().await = Some(cancel_tx);
 
+    let config_for_task = config_inner.clone();
     let handle = tokio::spawn(async move {
-        connect_bot_sse(&sse_url, token, bot_state_for_task, cancel_rx).await;
+        connect_bot_sse(config_for_task, bot_state_for_task, cancel_rx).await;
     });
     *bot_state_clone.connection_task.lock().await = Some(handle);
 
@@ -678,45 +732,12 @@ pub async fn get_login_info(
     // 读取配置获取bot连接信息
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(config) = serde_json::from_str::<BotConfig>(&content) {
-            let api_url = format!("{}/get_login_info", config.get_api_url());
-
-            let client = reqwest::Client::builder().no_proxy().build().expect("Failed to build reqwest client");
-            let mut request_builder = client
-                .post(&api_url)
-                .header("Content-Type", "application/json");
-
-            // 如果有token，添加Authorization header
-            if let Some(ref token_str) = config.token {
-                request_builder =
-                    request_builder.header("Authorization", format!("Bearer {}", token_str));
-            }
-
-            let body = serde_json::to_string(&serde_json::json!({})).unwrap_or_default();
-            match request_builder.body(body).send().await {
-                Ok(response) => {
-                    if let Ok(text) = response.text().await {
-                        // 解析bot返回的响应
-                        if let Ok(bot_response) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if let (Some(uin), Some(nickname)) = (
-                                bot_response
-                                    .get("data")
-                                    .and_then(|d| d.get("uin"))
-                                    .and_then(|u| u.as_i64()),
-                                bot_response
-                                    .get("data")
-                                    .and_then(|d| d.get("nickname"))
-                                    .and_then(|n| n.as_str()),
-                            ) {
-                                return Json(ApiResponse {
-                                    retcode: 0,
-                                    data: LoginInfo {
-                                        uin,
-                                        nickname: nickname.to_string(),
-                                    },
-                                });
-                            }
-                        }
-                    }
+            match fetch_bot_login_info_from_config(&config).await {
+                Ok(login_info) => {
+                    return Json(ApiResponse {
+                        retcode: 0,
+                        data: login_info,
+                    });
                 }
                 Err(e) => {
                     log_error!("Failed to get login info: {}", e);
@@ -768,10 +789,6 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
         };
         let _ = bot_state.status_sender.send(status);
 
-        // 启动连接
-        let token = config.token.clone();
-        let sse_url = config.get_event_url();
-
         if let Some(cancel) = bot_state.cancel_sender.lock().await.take() {
             let _ = cancel.send(());
         }
@@ -783,8 +800,9 @@ pub async fn check_and_auto_connect(bot_state: Arc<crate::server::BotConnectionS
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
         *bot_state.cancel_sender.lock().await = Some(cancel_tx);
 
+        let config_for_task = config.clone();
         let handle = tokio::spawn(async move {
-            connect_bot_sse(&sse_url, token, bot_state_for_task, cancel_rx).await;
+            connect_bot_sse(config_for_task, bot_state_for_task, cancel_rx).await;
         });
         *bot_state.connection_task.lock().await = Some(handle);
     }
@@ -815,8 +833,7 @@ async fn update_auto_connect_status(
 }
 
 async fn connect_bot_sse(
-    sse_url: &str,
-    token: Option<String>,
+    config: BotConfig,
     bot_state: Arc<crate::server::BotConnectionState>,
     mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -829,15 +846,17 @@ async fn connect_bot_sse(
             break;
         }
 
+        let sse_url = config.get_event_url();
+
         // 构建HTTP客户端
         let client = reqwest::Client::builder().no_proxy().build().expect("Failed to build reqwest client");
         let mut request_builder = client
-            .get(sse_url)
+            .get(&sse_url)
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache");
 
         // 如果有token，添加Authorization header
-        if let Some(ref token_str) = token {
+        if let Some(token_str) = config.token.as_deref() {
             request_builder =
                 request_builder.header("Authorization", format!("Bearer {}", token_str));
         }
@@ -845,29 +864,47 @@ async fn connect_bot_sse(
         match request_builder.send().await {
             Ok(response) => {
                 if response.status().is_success() {
-                    log_info!("连接成功");
-                    bot_state
-                        .is_connected
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    bot_state
-                        .is_connecting
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    match fetch_bot_login_info_from_config(&config).await {
+                        Ok(_) => {
+                            log_info!("连接成功");
+                            bot_state
+                                .is_connected
+                                .store(true, std::sync::atomic::Ordering::SeqCst);
+                            bot_state
+                                .is_connecting
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
 
-                    // 连接成功后，设置auto_connect为true
-                    update_auto_connect_status(&bot_state, true).await;
+                            // 连接成功后，设置auto_connect为true
+                            update_auto_connect_status(&bot_state, true).await;
 
-                    // 发送连接成功状态
-                    let status = BotStatusResponse {
-                        connected: true,
-                        connecting: false,
-                    };
-                    let _ = bot_state.status_sender.send(status);
+                            // 发送连接成功状态
+                            let status = BotStatusResponse {
+                                connected: true,
+                                connecting: false,
+                            };
+                            let _ = bot_state.status_sender.send(status);
 
-                    let _ = handle_bot_sse_stream(response, bot_state.clone(), &mut cancel_rx).await;
+                            let _ = handle_bot_sse_stream(
+                                response,
+                                bot_state.clone(),
+                                &mut cancel_rx,
+                            )
+                            .await;
 
-                    bot_state
-                        .is_connected
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                            bot_state
+                                .is_connected
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            bot_state
+                                .is_connected
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            log_error!(
+                                "Event SSE connected but API validation failed, reconnecting... ({})",
+                                e
+                            );
+                        }
+                    }
                 } else {
                     log_error!("连接断开，重连中... (HTTP {})", response.status());
                 }

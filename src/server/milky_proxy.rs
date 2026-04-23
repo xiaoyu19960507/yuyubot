@@ -67,6 +67,7 @@ impl<'r> FromRequest<'r> for PluginAuth {
 pub struct MilkyApiProxy {
     bot_config: Arc<RwLock<BotConfig>>,
     client: reqwest::Client,
+    bot_state: Arc<crate::server::BotConnectionState>,
 }
 
 pub struct MilkyEventProxy {
@@ -98,6 +99,7 @@ pub async fn spawn_milky_proxy_servers(
     let api_proxy = Arc::new(MilkyApiProxy {
         bot_config: bot_config.clone(),
         client: reqwest::Client::builder().no_proxy().build()?,
+        bot_state: bot_state.clone(),
     });
 
     let (tx, _) = broadcast::channel::<SseMessage>(2048);
@@ -174,6 +176,22 @@ pub struct ProxyBytesResponse {
     body: Vec<u8>,
 }
 
+impl ProxyBytesResponse {
+    fn json_error(status: Status, message: &str) -> Self {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "retcode": -1,
+            "data": message,
+        }))
+        .unwrap_or_else(|_| b"{\"retcode\":-1,\"data\":\"Internal server error\"}".to_vec());
+
+        Self {
+            status,
+            content_type: ContentType::JSON,
+            body,
+        }
+    }
+}
+
 impl<'r> Responder<'r, 'static> for ProxyBytesResponse {
     fn respond_to(self, _: &'r Request<'_>) -> rocket::response::Result<'static> {
         Response::build()
@@ -192,6 +210,13 @@ async fn proxy_api(
     headers: ForwardHeaders,
     proxy: &State<Arc<MilkyApiProxy>>,
 ) -> Result<ProxyBytesResponse, Status> {
+    if !proxy.bot_state.is_connected.load(Ordering::SeqCst) {
+        return Ok(ProxyBytesResponse::json_error(
+            Status::ServiceUnavailable,
+            "Bot not connected",
+        ));
+    }
+
     let body = data
         .open(4.mebibytes())
         .into_bytes()
@@ -339,7 +364,9 @@ fn event_ws(
 async fn run_upstream_sse(proxy: Arc<MilkyEventProxy>) {
     loop {
         // 检查是否应该连接
-        if !proxy.bot_state.should_connect.load(Ordering::SeqCst) {
+        if !proxy.bot_state.should_connect.load(Ordering::SeqCst)
+            || !proxy.bot_state.is_connected.load(Ordering::SeqCst)
+        {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             continue;
         }
@@ -383,7 +410,9 @@ async fn run_upstream_sse(proxy: Arc<MilkyEventProxy>) {
 
         while let Some(chunk) = stream.next().await {
             // 检查是否应该断开连接
-            if !proxy.bot_state.should_connect.load(Ordering::SeqCst) {
+            if !proxy.bot_state.should_connect.load(Ordering::SeqCst)
+                || !proxy.bot_state.is_connected.load(Ordering::SeqCst)
+            {
                 break;
             }
 
