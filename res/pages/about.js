@@ -38,7 +38,7 @@ const AboutPage = {
         <div class="user-avatar"><img src="favicon.ico" alt="Avatar"></div>
         <div class="user-info">
           <h3>羽羽BOT</h3>
-          <p>OO机器人平台的插件管理工具，Milky应用端。名称取自《xxxHOLiC》中的五月七日小羽——一位在孤独中依然保持纯真与勇敢，拥有通灵能力的温柔少女。</p>
+          <p>OO机器人平台的插件管理工具，Milky应用端。名称取自《xxxHOLiC》中的五月七日小羽（Kohane Tsuyuri）——一位在孤独中依然保持纯真与勇敢，拥有通灵能力的温柔少女。</p>
         </div>
       </div>
       <div class="card">
@@ -64,36 +64,36 @@ const AboutPage = {
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
              <div style="width: 40px; height: 40px; border-radius: 50%; background: #e91e63; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">X</div>
              <div>
-                <div style="font-weight: 600; font-size: 14px;">Xiaoyu</div>
+                <div style="font-weight: 600; font-size: 14px;">Kohane</div>
                 <div style="font-size: 12px; color: var(--text-secondary);">灵魂作者</div>
-                 <div style="font-size: 12px; color: var(--accent-color);">幻梦原点</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">负责可爱就够了</div>
              </div>
           </div>
 
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
              <div style="width: 40px; height: 40px; border-radius: 50%; background: #6b5b95; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">C</div>
              <div>
-                <div style="font-weight: 600; font-size: 14px;">Claude Opus 4.5</div>
+                <div style="font-weight: 600; font-size: 14px;">Claude Opus 4.6</div>
                 <div style="font-size: 12px; color: var(--text-secondary);">第一作者</div>
-                <div style="font-size: 12px; color: var(--accent-color);">赛博领航员</div>
+                <div style="font-size: 12px; color: var(--accent-color);">首席背锅侠</div>
              </div>
           </div>
 
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
-             <div style="width: 40px; height: 40px; border-radius: 50%; background: #4caf50; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #10a37f; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
              <div>
-                <div style="font-weight: 600; font-size: 14px;">Gemini 3 Pro Preview</div>
+                <div style="font-weight: 600; font-size: 14px;">GPT 5.4</div>
                 <div style="font-size: 12px; color: var(--text-secondary);">第二作者</div>
-                 <div style="font-size: 12px; color: var(--accent-color);">极速智囊团</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">全栈补完计划</div>
              </div>
           </div>
 
           <div style="padding: 15px; background: var(--hover-bg); border-radius: 8px; display: flex; align-items: center; gap: 12px;">
-             <div style="width: 40px; height: 40px; border-radius: 50%; background: #00bcd4; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
+             <div style="width: 40px; height: 40px; border-radius: 50%; background: #8e44ad; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 18px;">G</div>
              <div>
-                <div style="font-weight: 600; font-size: 14px;">Gemini 3 Flash Preview</div>
+                <div style="font-weight: 600; font-size: 14px;">GLM 5.1</div>
                 <div style="font-size: 12px; color: var(--text-secondary);">第三作者</div>
-                 <div style="font-size: 12px; color: var(--accent-color);">灵感闪击手</div>
+                 <div style="font-size: 12px; color: var(--accent-color);">智谱爸爸</div>
              </div>
           </div>
 
