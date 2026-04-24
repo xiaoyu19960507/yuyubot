@@ -34,7 +34,11 @@ static LOGGER_INIT: OnceCell<()> = OnceCell::new();
 struct AppLogLayer;
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for AppLogLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let metadata = event.metadata();
         let level = metadata.level().to_string().to_lowercase();
         let target = metadata.target();

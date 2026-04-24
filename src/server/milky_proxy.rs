@@ -259,7 +259,12 @@ async fn proxy_api(
                 group_id,
                 permission_mode_name(permission_config.mode),
             );
-            log_warn!("Blocked plugin {} API {} for group {}", plugin_id, api, group_id);
+            log_warn!(
+                "Blocked plugin {} API {} for group {}",
+                plugin_id,
+                api,
+                group_id
+            );
             return Ok(ProxyBytesResponse::json_error(Status::Forbidden, &message));
         }
     }

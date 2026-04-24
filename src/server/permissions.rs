@@ -4,8 +4,8 @@ use rocket::{get, post, serde::json::Json, State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -199,8 +199,7 @@ async fn fetch_group_options_from_config(
         .header("Content-Type", "application/json");
 
     if let Some(token_str) = config.token.as_deref() {
-        request_builder =
-            request_builder.header("Authorization", format!("Bearer {}", token_str));
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", token_str));
     }
 
     let response = request_builder
@@ -219,8 +218,8 @@ async fn fetch_group_options_from_config(
         return Err(format!("API returned HTTP {}", status));
     }
 
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse API response: {}", e))?;
+    let payload: Value =
+        serde_json::from_str(&body).map_err(|e| format!("Failed to parse API response: {}", e))?;
 
     if let Some(retcode) = payload.get("retcode").and_then(Value::as_i64) {
         if retcode != 0 {
