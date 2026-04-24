@@ -13,7 +13,7 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
-use windows_sys::Win32::System::Threading::{CreateMutexW, CreateEventW, SetEvent};
+use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
 
 #[derive(Embed)]
 #[folder = "res/"]
@@ -62,11 +62,9 @@ fn fnv1a_hash(input: &str) -> u64 {
 }
 
 fn acquire_single_instance_or_exit() -> Result<SingleInstanceGuard, String> {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("获取当前可执行文件路径失败: {}", e))?;
-    let exe_path_norm = exe_path
-        .to_string_lossy()
-        .to_lowercase();
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("获取当前可执行文件路径失败: {}", e))?;
+    let exe_path_norm = exe_path.to_string_lossy().to_lowercase();
     let hash = fnv1a_hash(&exe_path_norm);
 
     let mutex_name = format!("Global\\yuyubot_single_instance_mutex_{:016x}", hash);
@@ -88,7 +86,8 @@ fn acquire_single_instance_or_exit() -> Result<SingleInstanceGuard, String> {
         return Err(format!("CreateMutexW 失败: {}", err_code));
     }
 
-    let event_handle = unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, event_name_wide.as_ptr()) };
+    let event_handle =
+        unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, event_name_wide.as_ptr()) };
     if event_handle.is_null() {
         unsafe { CloseHandle(mutex_handle) };
         let err_code = unsafe { GetLastError() };
@@ -114,6 +113,7 @@ fn acquire_single_instance_or_exit() -> Result<SingleInstanceGuard, String> {
 
 fn main() {
     logger::init_logger();
+    let is_auto_start_launch = runtime::is_auto_start_launch();
 
     let single_instance_guard = match acquire_single_instance_or_exit() {
         Ok(g) => g,
@@ -133,6 +133,10 @@ fn main() {
     log_info!("框架启动");
 
     // 初始化全局 Runtime（必须在所有异步操作之前）
+    if is_auto_start_launch {
+        log_info!("Detected auto-start launch, main window will stay hidden");
+    }
+
     let _runtime = runtime::init_runtime();
 
     let (port, server_state) = match server::start_server_safe() {
@@ -156,5 +160,11 @@ fn main() {
     // 放弃 guard 的析构，将句柄交给 run_app 自己管理，以便在重启前主动释放
     std::mem::forget(single_instance_guard);
 
-    window::run_app(port, server_state, activate_event_handle, mutex_handle);
+    window::run_app(
+        port,
+        server_state,
+        activate_event_handle,
+        mutex_handle,
+        is_auto_start_launch,
+    );
 }

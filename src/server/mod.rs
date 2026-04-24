@@ -176,6 +176,7 @@ pub fn start_server_safe() -> Result<(u16, Arc<ServerState>), String> {
                         api::clear_logs,
                         api::logs_stream,
                         api::get_system_info,
+                        api::save_system_config,
                         api::open_data_dir,
                         api::open_plugins_dir,
                         api::restart_program,

@@ -8,12 +8,12 @@ use tao::{
     event_loop::EventLoopProxy,
     window::{Window, WindowBuilder, WindowId},
 };
-use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
 };
+use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use wry::{NewWindowResponse, WebViewBuilder};
 
 #[cfg(not(debug_assertions))]
@@ -68,11 +68,13 @@ fn create_webview(
 
     WebViewBuilder::new_with_web_context(web_context)
         .with_url(url)
-        .with_initialization_script(r#"
+        .with_initialization_script(
+            r#"
             window.close = function() {
                 window.ipc.postMessage('close_window');
             };
-        "#)
+        "#,
+        )
         .with_document_title_changed_handler(move |title| {
             let _ = proxy_for_title.send_event(UserEvent::TitleChanged(window_id, title));
         })
@@ -267,7 +269,13 @@ use crate::server::ServerState;
 use std::sync::Arc;
 use windows_sys::Win32::Foundation::CloseHandle;
 
-pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle: usize, mutex_handle: usize) {
+pub fn run_app(
+    port: u16,
+    server_state: Arc<ServerState>,
+    activate_event_handle: usize,
+    mutex_handle: usize,
+    launch_hidden: bool,
+) {
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     let base_url = format!("http://127.0.0.1:{}", port);
@@ -284,7 +292,7 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle:
 
     let mut webviews = HashMap::new();
     let mut main_window_id: Option<WindowId> = None;
-    let mut initial_window_created = false;
+    let mut initial_window_created = launch_hidden;
     let mut is_restarting = false;
 
     // 初始化 WebContext
@@ -373,9 +381,8 @@ pub fn run_app(port: u16, server_state: Arc<ServerState>, activate_event_handle:
                     }
 
                     log_info!("正在重启程序...");
-                    let exe_path = std::env::current_exe().unwrap_or_else(|_| {
-                        runtime::get_exe_dir().join("yuyubot.exe")
-                    });
+                    let exe_path = std::env::current_exe()
+                        .unwrap_or_else(|_| runtime::get_exe_dir().join("yuyubot.exe"));
 
                     use std::os::windows::process::CommandExt;
                     let detached_process = 0x00000008;
