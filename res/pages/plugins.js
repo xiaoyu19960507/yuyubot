@@ -410,8 +410,13 @@ const PluginsPage = {
               if (!plugin.output) {
                 plugin.output = [];
               }
-              plugin.output.push(outputEvent.line);
-              
+              if (outputEvent.partial && plugin.output.length > 0) {
+                // Replace the last line if it was a partial update
+                plugin.output[plugin.output.length - 1] = outputEvent.line;
+              } else {
+                plugin.output.push(outputEvent.line);
+              }
+
               if (plugin.output.length > MAX_OUTPUT_LINES) {
                 plugin.output.shift();
               }

@@ -141,10 +141,12 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id,
                             line: msg,
-                        });
+            partial: false,
+        });
                     }
 
                     let mut buf = [0u8; 4096];
+                    let mut line_buf = String::new();
                     session.set_expect_timeout(Some(std::time::Duration::from_millis(500)));
 
                     loop {
@@ -170,6 +172,7 @@ impl PluginManager {
                                                 &output_sender,
                                                 &plugin_id_clone,
                                                 &text,
+                                                &mut line_buf,
                                             );
                                         }
                                         Err(ref e)
@@ -178,6 +181,7 @@ impl PluginManager {
                                     }
                                     std::thread::sleep(std::time::Duration::from_millis(50));
                                 }
+                                line_buf.clear();
                             }
 
                             if session.is_alive().unwrap_or(false) {
@@ -210,11 +214,13 @@ impl PluginManager {
                                             &output_sender,
                                             &plugin_id_clone,
                                             &text,
+                                            &mut line_buf,
                                         );
                                     }
                                     Err(_) => break,
                                 }
                             }
+                            line_buf.clear();
                             break;
                         }
 
@@ -235,6 +241,7 @@ impl PluginManager {
                                     &output_sender,
                                     &plugin_id_clone,
                                     &text,
+                                    &mut line_buf,
                                 );
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -262,7 +269,8 @@ impl PluginManager {
                                 let _ = sender.send(PluginOutputEvent {
                                     plugin_id: id,
                                     line: err_msg,
-                                });
+            partial: false,
+        });
                                 if plugin_clone.is_current_run(run_id) {
                                     rt_handle.block_on(plugin_clone.set_process_alive(false));
                                 }
@@ -303,7 +311,8 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id.clone(),
                             line: msg,
-                        });
+            partial: false,
+        });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,
                             status: PluginStatus::Stopped,
@@ -336,7 +345,8 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id.clone(),
                             line: err_msg,
-                        });
+            partial: false,
+        });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,
                             status: PluginStatus::Error,

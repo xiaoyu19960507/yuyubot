@@ -36,6 +36,8 @@ pub struct PluginManager {
 pub struct PluginOutputEvent {
     pub plugin_id: String,
     pub line: String,
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -229,20 +231,40 @@ fn process_output(
     sender: &broadcast::Sender<PluginOutputEvent>,
     plugin_id: &str,
     text: &str,
+    buffer: &mut String,
 ) {
-    for line in text.lines() {
-        if !line.is_empty() {
-            let line_clone = line.to_string();
+    buffer.push_str(text);
+    // Emit all complete lines (ending with \n)
+    while let Some(newline_pos) = buffer.find('\n') {
+        let line = buffer[..newline_pos].to_string();
+        *buffer = buffer[newline_pos + 1..].to_string();
+        let line = line.trim_end_matches('\r').to_string();
+        if !line.trim().is_empty() {
+            let line_clone = line.clone();
             let plugin_clone = plugin.clone();
-            let line_for_async = line_clone.clone();
             let _handle = rt.spawn(async move {
-                plugin_clone.add_output(line_for_async).await;
+                plugin_clone.add_output(line_clone).await;
             });
             let _ = sender.send(PluginOutputEvent {
                 plugin_id: plugin_id.to_string(),
-                line: line_clone,
+                line,
+                partial: false,
             });
         }
+    }
+    // Emit remaining buffer content as a live partial line
+    if !buffer.trim().is_empty() {
+        let line = buffer.trim().to_string();
+        let plugin_clone = plugin.clone();
+        let line_for_async = line.clone();
+        let _handle = rt.spawn(async move {
+            plugin_clone.set_partial_line(line_for_async).await;
+        });
+        let _ = sender.send(PluginOutputEvent {
+            plugin_id: plugin_id.to_string(),
+            line,
+            partial: true,
+        });
     }
 }
 

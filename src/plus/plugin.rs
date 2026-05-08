@@ -34,6 +34,7 @@ pub struct PluginState {
     pub is_alive: bool,
     pub pid: u32,
     pub output: Vec<String>,
+    pub partial_line: Option<String>,
     pub enabled: bool,
     pub api_token: Option<String>,
     pub webui: Option<PluginWebUi>,
@@ -69,6 +70,7 @@ impl Plugin {
                 is_alive: false,
                 pid: 0,
                 output: Vec::new(),
+                partial_line: None,
                 enabled: false,
                 api_token: None,
                 webui: None,
@@ -133,11 +135,17 @@ impl Plugin {
     }
 
     pub async fn get_output(&self) -> Vec<String> {
-        self.state.lock().await.output.clone()
+        let state = self.state.lock().await;
+        let mut output = state.output.clone();
+        if let Some(ref partial) = state.partial_line {
+            output.push(partial.clone());
+        }
+        output
     }
 
     pub async fn add_output(&self, line: String) {
         let mut state = self.state.lock().await;
+        state.partial_line = None;
         state.output.push(line);
         // 限制最大行数
         if state.output.len() > MAX_OUTPUT_LINES {
@@ -145,8 +153,15 @@ impl Plugin {
         }
     }
 
+    pub async fn set_partial_line(&self, line: String) {
+        let mut state = self.state.lock().await;
+        state.partial_line = Some(line);
+    }
+
     pub async fn clear_output(&self) {
-        self.state.lock().await.output.clear();
+        let mut state = self.state.lock().await;
+        state.output.clear();
+        state.partial_line = None;
     }
 
     pub async fn set_api_token(&self, token: Option<String>) {
