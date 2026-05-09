@@ -10,6 +10,7 @@ const PluginsPage = {
       autoScroll: true,
       pendingStatusUpdates: {},
       activeMoreMenu: null,
+      outputModalPlugin: null,
       stoppingPlugins: {},
       confirmDialog: {
         show: false,
@@ -34,11 +35,6 @@ const PluginsPage = {
             <button class="btn-primary" @click="importPlugin" :disabled="loading" style="padding: 6px 12px; text-align: center;">
               导入插件
             </button>
-            <label v-if="selectedPlugin" class="toggle-switch" style="font-weight: normal; font-size: 14px; margin: 0;">
-              <input type="checkbox" v-model="autoScroll">
-              <span class="toggle-slider"></span>
-              <span class="toggle-label">自动滚动</span>
-            </label>
           </div>
         </div>
         
@@ -48,82 +44,105 @@ const PluginsPage = {
             <p style="font-size: 12px; margin-top: 10px;">请在 app 目录下创建插件文件夹</p>
           </div>
         
-          <div v-for="plugin in plugins" :key="plugin.id" class="plugin-card" @click="togglePlugin(plugin.id)">
-          <div class="plugin-header">
-            <div class="plugin-info">
-              <h3 class="plugin-name">{{ plugin.name }} <span style="font-size: 12px; color: var(--text-secondary);">({{ plugin.id }})</span></h3>
-              <p class="plugin-description">{{ plugin.description }}</p>
-              <p v-if="plugin.author" class="plugin-author">作者: {{ plugin.author }}</p>
-              <div class="plugin-meta">
-                <span class="plugin-version">v{{ plugin.version }}</span>
-                <span :class="'plugin-status ' + plugin.status">{{ getStatusText(plugin.status) }}</span>
-                <span :class="'plugin-enabled ' + (plugin.enabled ? 'yes' : 'no')">{{ plugin.enabled ? '已启用' : '已禁用' }}</span>
-              </div>
+          <div v-for="(plugin, index) in plugins" :key="plugin.id" class="plugin-card" @click="openOutputModal(plugin.id)">
+            <div class="reorder-btns" @click.stop>
+              <button class="reorder-btn" :disabled="index === 0" @click="moveUp(index)" title="上移">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
+              </button>
+              <button class="reorder-btn" :disabled="index === plugins.length - 1" @click="moveDown(index)" title="下移">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
             </div>
-            <div class="plugin-actions">
-              <button v-if="plugin.webui_url" class="btn-primary" @click.stop="openPluginMenu(plugin.webui_url)" :disabled="loading" style="margin-right: 5px;" title="插件菜单">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-                菜单
-              </button>
-              
-              <button v-if="stoppingPlugins[plugin.id]" class="btn-warning" disabled>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                停止中...
-              </button>
-              <button v-else-if="plugin.status !== 'running'" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                启动
-              </button>
-              <button v-else class="btn-warning" @click.stop="stopPlugin(plugin.id)" :disabled="loading">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-                停止
-              </button>
 
-              <div class="more-actions-wrapper" @click.stop>
-                <button class="btn-more" @click="toggleMoreMenu(plugin.id)" title="更多操作">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
-                </button>
-                <div v-if="activeMoreMenu === plugin.id" class="more-menu">
-                  <button class="btn-primary" @click="openPluginDir(plugin.id); activeMoreMenu = null" title="插件目录">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-                    插件目录
+            <div class="plugin-card-main">
+              <div class="plugin-header">
+                <div class="plugin-info">
+                  <h3 class="plugin-name">{{ plugin.name }} <span style="font-size: 12px; color: var(--text-secondary);">({{ plugin.id }})</span></h3>
+                  <p class="plugin-description">{{ plugin.description }}</p>
+                  <p v-if="plugin.author" class="plugin-author">作者: {{ plugin.author }}</p>
+                  <div class="plugin-meta">
+                    <span class="plugin-version">v{{ plugin.version }}</span>
+                    <span :class="'plugin-status ' + plugin.status">{{ getStatusText(plugin.status) }}</span>
+                    <span :class="'plugin-enabled ' + (plugin.enabled ? 'yes' : 'no')">{{ plugin.enabled ? '已启用' : '已禁用' }}</span>
+                  </div>
+                </div>
+                <div class="plugin-actions">
+                  <button v-if="plugin.webui_url" class="btn-primary" @click.stop="openPluginMenu(plugin.webui_url)" :disabled="loading" title="插件菜单">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                    菜单
                   </button>
-                  <button class="btn-primary" @click="openPluginDataDir(plugin.id); activeMoreMenu = null" title="数据目录">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    数据目录
+
+                  <button v-if="stoppingPlugins[plugin.id]" class="btn-warning" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    停止中...
                   </button>
-                  <button class="btn-primary" @click="exportPlugin(plugin.id); activeMoreMenu = null" :disabled="loading" title="导出插件">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                    导出
+                  <button v-else-if="plugin.status !== 'running'" class="btn-success" @click.stop="startPlugin(plugin.id)" :disabled="loading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    启动
                   </button>
-                  <button class="btn-danger" @click="uninstallPlugin(plugin.id); activeMoreMenu = null" :disabled="loading || plugin.status === 'running'" title="卸载插件">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                    卸载
+                  <button v-else class="btn-warning" @click.stop="stopPlugin(plugin.id)" :disabled="loading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                    停止
                   </button>
+
+                  <div class="more-actions-wrapper" @click.stop>
+                    <button class="btn-more" @click="toggleMoreMenu(plugin.id)" title="更多操作">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+                    </button>
+                    <div v-if="activeMoreMenu === plugin.id" class="more-menu">
+                      <button class="btn-primary" @click="openPluginDir(plugin.id); activeMoreMenu = null" title="插件目录">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        插件目录
+                      </button>
+                      <button class="btn-primary" @click="openPluginDataDir(plugin.id); activeMoreMenu = null" title="数据目录">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                        数据目录
+                      </button>
+                      <button class="btn-primary" @click="exportPlugin(plugin.id); activeMoreMenu = null" :disabled="loading" title="导出插件">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        导出
+                      </button>
+                      <button class="btn-danger" @click="uninstallPlugin(plugin.id); activeMoreMenu = null" :disabled="loading || plugin.status === 'running'" title="卸载插件">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        卸载
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
+
             </div>
           </div>
-          
-          <div v-if="selectedPlugin === plugin.id" class="plugin-output" @click.stop>
-            <div class="plugin-output-header">
-              <span>插件输出 ({{ plugin.output ? plugin.output.length : 0 }} 行)</span>
-              <button class="btn-clear" @click.stop="clearPluginOutput(plugin.id)">
+        </div>
+      </div>
+
+      <!-- Plugin Output Modal -->
+      <div v-if="outputModalPlugin" class="modal-overlay" @click="closeOutputModal">
+        <div class="modal output-modal" @click.stop>
+          <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>{{ getModalPluginName() }} — 输出</span>
+            <div class="output-modal-actions">
+              <label class="toggle-switch output-auto-scroll">
+                <input type="checkbox" v-model="autoScroll">
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">自动滚动</span>
+              </label>
+              <button class="btn-clear" @click.stop="clearPluginOutput(outputModalPlugin)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 清空
               </button>
-            </div>
-            <div class="plugin-output-container" :id="'output-' + plugin.id">
-              <div v-if="!plugin.output || plugin.output.length === 0" style="color: var(--text-secondary); padding: 10px;">
-                暂无输出
-              </div>
-              <div v-for="(line, i) in plugin.output" :key="i" class="output-line">{{ line }}</div>
+              <button class="btn-text" @click="closeOutputModal" style="padding: 4px 8px;">关闭</button>
             </div>
           </div>
-        </div>
+          <div class="plugin-output-container" :id="'output-' + outputModalPlugin" style="max-height: 60vh; min-height: 200px;">
+            <div v-if="!getModalPluginOutput() || getModalPluginOutput().length === 0" style="color: var(--text-secondary); padding: 10px; text-align: center;">
+              暂无输出
+            </div>
+            <div v-for="(line, i) in getModalPluginOutput()" :key="i" class="output-line">{{ line }}</div>
+          </div>
         </div>
       </div>
-      
+
       <!-- Confirmation Modal -->
       <div v-if="confirmDialog.show" class="modal-overlay" @click="confirmDialog.show = false">
         <div class="modal" @click.stop>
@@ -159,16 +178,53 @@ const PluginsPage = {
       const map = { 'running': '运行中', 'stopped': '已停止', 'error': '出错' };
       return map[status] || status;
     },
+    moveUp(index) {
+      if (index <= 0) return;
+      const item = this.plugins[index];
+      this.plugins.splice(index, 1);
+      this.plugins.splice(index - 1, 0, item);
+      this.savePluginOrder();
+    },
+    moveDown(index) {
+      if (index >= this.plugins.length - 1) return;
+      const item = this.plugins[index];
+      this.plugins.splice(index, 1);
+      this.plugins.splice(index + 1, 0, item);
+      this.savePluginOrder();
+    },
+    savePluginOrder() {
+      const order = this.plugins.map(p => p.id);
+      fetch('/api/plugins/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order })
+      }).catch(err => console.error('Failed to save plugin order:', err));
+    },
     openPluginMenu(url) {
       if (!url) return;
       window.open(url, '_blank');
     },
-    togglePlugin(id) {
-      if (this.selectedPlugin === id) {
-        this.selectedPlugin = null;
-      } else {
-        this.selectedPlugin = id;
-      }
+    openOutputModal(id) {
+      this.outputModalPlugin = id;
+      this.selectedPlugin = id;
+      this.$nextTick(() => {
+        const container = document.getElementById('output-' + id);
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+        }
+      });
+    },
+    closeOutputModal() {
+      this.outputModalPlugin = null;
+      this.selectedPlugin = null;
+    },
+    getModalPluginName() {
+      const plugin = this.plugins.find(p => p.id === this.outputModalPlugin);
+      return plugin ? plugin.name : '';
+    },
+    getModalPluginOutput() {
+      const plugin = this.plugins.find(p => p.id === this.outputModalPlugin);
+      return plugin ? plugin.output : [];
     },
     toggleMoreMenu(id) {
       if (this.activeMoreMenu === id) {

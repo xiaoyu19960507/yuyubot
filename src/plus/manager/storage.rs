@@ -109,6 +109,7 @@ impl PluginManager {
             drop(plugins);
 
             self.remove_enabled_plugin(plugin_id).await;
+            self.remove_from_plugin_order(plugin_id).await;
 
             Ok(())
         } else {
@@ -138,6 +139,20 @@ impl PluginManager {
                 webui_url,
             });
         }
+        drop(plugins);
+
+        let order = self.get_plugin_order().await;
+        // Sort: plugins in order first (in order position), unknown plugins last
+        result.sort_by(|a, b| {
+            let pos_a = order.iter().position(|id| id == &a.id);
+            let pos_b = order.iter().position(|id| id == &b.id);
+            match (pos_a, pos_b) {
+                (Some(pa), Some(pb)) => pa.cmp(&pb),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.cmp(&b.name),
+            }
+        });
 
         Ok(result)
     }

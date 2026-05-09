@@ -20,7 +20,7 @@ pub use bot::{
 pub use plugins::{
     clear_plugin_output, export_plugin, get_plugin_output, import_plugin, list_plugins,
     open_plugin_data_dir, open_plugin_dir, plugin_output_stream, plugins_events_stream,
-    plugins_status_stream, start_plugin, stop_plugin, uninstall_plugin,
+    plugins_status_stream, reorder_plugins, start_plugin, stop_plugin, uninstall_plugin,
 };
 pub use system::{
     clear_logs, get_app_info, get_app_nums, get_logs, get_system_info, get_ui_state, logs_stream,

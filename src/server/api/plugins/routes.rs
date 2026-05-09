@@ -1,7 +1,13 @@
 use super::ApiResponse;
 use crate::plus::PluginManager;
 use rocket::{get, post, serde::json::Json, State};
+use serde::Deserialize;
 use std::sync::Arc;
+
+#[derive(Deserialize)]
+pub struct ReorderRequest {
+    pub order: Vec<String>,
+}
 
 #[get("/plugins/list")]
 pub async fn list_plugins(
@@ -173,4 +179,16 @@ pub async fn uninstall_plugin(
             })
         }
     }
+}
+
+#[post("/plugins/reorder", data = "<req>")]
+pub async fn reorder_plugins(
+    req: Json<ReorderRequest>,
+    manager: &State<Arc<PluginManager>>,
+) -> Json<ApiResponse<String>> {
+    manager.save_plugin_order(req.order.clone()).await;
+    Json(ApiResponse {
+        retcode: 0,
+        data: "Order updated".to_string(),
+    })
 }

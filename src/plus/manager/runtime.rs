@@ -141,8 +141,8 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id,
                             line: msg,
-            partial: false,
-        });
+                            partial: false,
+                        });
                     }
 
                     let mut buf = [0u8; 4096];
@@ -269,8 +269,8 @@ impl PluginManager {
                                 let _ = sender.send(PluginOutputEvent {
                                     plugin_id: id,
                                     line: err_msg,
-            partial: false,
-        });
+                                    partial: false,
+                                });
                                 if plugin_clone.is_current_run(run_id) {
                                     rt_handle.block_on(plugin_clone.set_process_alive(false));
                                 }
@@ -311,8 +311,8 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id.clone(),
                             line: msg,
-            partial: false,
-        });
+                            partial: false,
+                        });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,
                             status: PluginStatus::Stopped,
@@ -345,8 +345,8 @@ impl PluginManager {
                         let _ = sender.send(PluginOutputEvent {
                             plugin_id: id.clone(),
                             line: err_msg,
-            partial: false,
-        });
+                            partial: false,
+                        });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,
                             status: PluginStatus::Error,

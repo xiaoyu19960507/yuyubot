@@ -15,7 +15,10 @@ use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PluginConfig {
+    #[serde(default)]
     pub enabled_plugins: Vec<String>,
+    #[serde(default)]
+    pub plugin_order: Vec<String>,
 }
 
 pub struct PluginManager {
