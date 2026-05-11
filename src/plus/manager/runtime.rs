@@ -1,6 +1,6 @@
 use super::{
-    generate_plugin_api_token, generate_tmp_run_suffix, process_output, try_send_ctrl_c,
-    wait_tcp_ready, PluginManager, PluginOutputEvent, PluginStatusEvent,
+    flush_output_buffer, generate_plugin_api_token, generate_tmp_run_suffix, process_output,
+    try_send_ctrl_c, wait_tcp_ready, PluginManager, PluginOutputEvent, PluginStatusEvent,
 };
 use crate::plus::plugin::PluginStatus;
 use crate::runtime;
@@ -142,6 +142,7 @@ impl PluginManager {
                             plugin_id: id,
                             line: msg,
                             partial: false,
+                            replace_partial: false,
                         });
                     }
 
@@ -181,7 +182,13 @@ impl PluginManager {
                                     }
                                     std::thread::sleep(std::time::Duration::from_millis(50));
                                 }
-                                line_buf.clear();
+                                flush_output_buffer(
+                                    &rt_handle,
+                                    &plugin_clone,
+                                    &output_sender,
+                                    &plugin_id_clone,
+                                    &mut line_buf,
+                                );
                             }
 
                             if session.is_alive().unwrap_or(false) {
@@ -220,7 +227,13 @@ impl PluginManager {
                                     Err(_) => break,
                                 }
                             }
-                            line_buf.clear();
+                            flush_output_buffer(
+                                &rt_handle,
+                                &plugin_clone,
+                                &output_sender,
+                                &plugin_id_clone,
+                                &mut line_buf,
+                            );
                             break;
                         }
 
@@ -270,6 +283,7 @@ impl PluginManager {
                                     plugin_id: id,
                                     line: err_msg,
                                     partial: false,
+                                    replace_partial: false,
                                 });
                                 if plugin_clone.is_current_run(run_id) {
                                     rt_handle.block_on(plugin_clone.set_process_alive(false));
@@ -312,6 +326,7 @@ impl PluginManager {
                             plugin_id: id.clone(),
                             line: msg,
                             partial: false,
+                            replace_partial: false,
                         });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,
@@ -346,6 +361,7 @@ impl PluginManager {
                             plugin_id: id.clone(),
                             line: err_msg,
                             partial: false,
+                            replace_partial: false,
                         });
                         let _ = status_sender.send(PluginStatusEvent {
                             plugin_id: id,

@@ -41,6 +41,8 @@ pub struct PluginOutputEvent {
     pub line: String,
     #[serde(default)]
     pub partial: bool,
+    #[serde(default)]
+    pub replace_partial: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -61,6 +63,7 @@ pub struct PluginInfo {
     pub status: PluginStatus,
     pub enabled: bool,
     pub output: Vec<String>,
+    pub output_partial: bool,
     pub webui_url: Option<String>,
 }
 
@@ -236,39 +239,62 @@ fn process_output(
     text: &str,
     buffer: &mut String,
 ) {
+    let mut replace_next_partial = !buffer.trim().is_empty();
     buffer.push_str(text);
     // Emit all complete lines (ending with \n)
     while let Some(newline_pos) = buffer.find('\n') {
         let line = buffer[..newline_pos].to_string();
         *buffer = buffer[newline_pos + 1..].to_string();
         let line = line.trim_end_matches('\r').to_string();
+        let replace_partial = replace_next_partial;
+        replace_next_partial = false;
+
         if !line.trim().is_empty() {
-            let line_clone = line.clone();
-            let plugin_clone = plugin.clone();
-            let _handle = rt.spawn(async move {
-                plugin_clone.add_output(line_clone).await;
-            });
+            rt.block_on(plugin.add_output(line.clone()));
             let _ = sender.send(PluginOutputEvent {
                 plugin_id: plugin_id.to_string(),
                 line,
                 partial: false,
+                replace_partial,
             });
         }
     }
+
     // Emit remaining buffer content as a live partial line
     if !buffer.trim().is_empty() {
         let line = buffer.trim().to_string();
-        let plugin_clone = plugin.clone();
-        let line_for_async = line.clone();
-        let _handle = rt.spawn(async move {
-            plugin_clone.set_partial_line(line_for_async).await;
-        });
+        rt.block_on(plugin.set_partial_line(line.clone()));
         let _ = sender.send(PluginOutputEvent {
             plugin_id: plugin_id.to_string(),
             line,
             partial: true,
+            replace_partial: false,
         });
     }
+}
+
+fn flush_output_buffer(
+    rt: &tokio::runtime::Handle,
+    plugin: &Arc<Plugin>,
+    sender: &broadcast::Sender<PluginOutputEvent>,
+    plugin_id: &str,
+    buffer: &mut String,
+) {
+    if buffer.trim().is_empty() {
+        buffer.clear();
+        return;
+    }
+
+    let line = buffer.trim().to_string();
+    buffer.clear();
+
+    rt.block_on(plugin.add_output(line.clone()));
+    let _ = sender.send(PluginOutputEvent {
+        plugin_id: plugin_id.to_string(),
+        line,
+        partial: false,
+        replace_partial: true,
+    });
 }
 
 fn generate_plugin_api_token() -> String {

@@ -143,6 +143,10 @@ impl Plugin {
         output
     }
 
+    pub async fn has_partial_output(&self) -> bool {
+        self.state.lock().await.partial_line.is_some()
+    }
+
     pub async fn add_output(&self, line: String) {
         let mut state = self.state.lock().await;
         state.partial_line = None;

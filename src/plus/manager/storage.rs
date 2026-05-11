@@ -125,6 +125,7 @@ impl PluginManager {
             let status = plugin.get_status().await;
             let enabled = plugin.is_enabled().await;
             let output = plugin.get_output().await;
+            let output_partial = plugin.has_partial_output().await;
             let webui_url = plugin.get_webui_url().await;
 
             result.push(PluginInfo {
@@ -136,6 +137,7 @@ impl PluginManager {
                 status,
                 enabled,
                 output,
+                output_partial,
                 webui_url,
             });
         }

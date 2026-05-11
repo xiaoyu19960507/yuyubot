@@ -352,10 +352,17 @@ const PluginsPage = {
           if (data.retcode === 0) {
             // 保留现有的 output 数据（使用 id 作为 key）
             const oldPlugins = {};
-            this.plugins.forEach(p => { oldPlugins[p.id] = p.output; });
+            this.plugins.forEach(p => {
+              oldPlugins[p.id] = {
+                output: p.output,
+                outputPartial: !!p.outputPartial
+              };
+            });
             
             this.plugins = data.data.map(p => {
-              let output = oldPlugins[p.id] || p.output || [];
+              const oldPlugin = oldPlugins[p.id];
+              let output = oldPlugin ? oldPlugin.output : (p.output || []);
+              let outputPartial = oldPlugin ? oldPlugin.outputPartial : !!p.output_partial;
               // 限制输出行数
               if (output.length > MAX_OUTPUT_LINES) {
                 output = output.slice(-MAX_OUTPUT_LINES);
@@ -369,7 +376,7 @@ const PluginsPage = {
                   p.webui_url = update.webui_url;
               }
               
-              return { ...p, output };
+              return { ...p, output, outputPartial };
             });
             // 清除已应用的更新
             this.pendingStatusUpdates = {};
@@ -466,11 +473,20 @@ const PluginsPage = {
               if (!plugin.output) {
                 plugin.output = [];
               }
-              if (outputEvent.partial && plugin.output.length > 0) {
-                // Replace the last line if it was a partial update
+              const hasPartial = !!plugin.outputPartial && plugin.output.length > 0;
+              if (outputEvent.partial) {
+                if (hasPartial) {
+                  plugin.output[plugin.output.length - 1] = outputEvent.line;
+                } else {
+                  plugin.output.push(outputEvent.line);
+                }
+                plugin.outputPartial = true;
+              } else if (outputEvent.replace_partial && hasPartial) {
                 plugin.output[plugin.output.length - 1] = outputEvent.line;
+                plugin.outputPartial = false;
               } else {
                 plugin.output.push(outputEvent.line);
+                plugin.outputPartial = false;
               }
 
               if (plugin.output.length > MAX_OUTPUT_LINES) {
